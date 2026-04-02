@@ -28,21 +28,21 @@ def get_config(config_str="square/mh,sa,1"):
     assert config_type in {"s", "a", "sa"}
 
     encoder_keys = {
-        "s": {"observation->state": None, "observation->image->agent": ModuleSpec.create(ResNet18, num_kp=64)},
+        "s": {"observation->state": None, "observation->image->wrist": ModuleSpec.create(ResNet18, num_kp=64)},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            "observation->image->agent": ModuleSpec.create(ResNet18, num_kp=64),
+            "observation->image->wrist": ModuleSpec.create(ResNet18, num_kp=64),
             "action": None,
         },
     }[config_type]
 
     decoder_keys = {
-        "s": {"observation->state": None, "observation->image->agent": ModuleSpec.create(ResNet18Decoder)},
+        "s": {"observation->state": None, "observation->image->wrist": ModuleSpec.create(ResNet18Decoder)},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            "observation->image->agent": ModuleSpec.create(ResNet18Decoder),
+            "observation->image->wrist": ModuleSpec.create(ResNet18Decoder),
             "action": None,
         },
     }[config_type]
@@ -55,9 +55,9 @@ def get_config(config_str="square/mh,sa,1"):
     }[config_type]
 
     weights = {
-        "s": {"observation->state": 1.0, "observation->image->agent": 1 / 200},
+        "s": {"observation->state": 1.0, "observation->image->wrist": 1 / 200},
         "a": {"action": 1.0},
-        "sa": {"observation->state": 1.0, "observation->image->agent": 1 / 200, "action": 1.0},
+        "sa": {"observation->state": 1.0, "observation->image->wrist": 1 / 200, "action": 1.0},
     }[config_type]
 
     # Define the structure
@@ -69,7 +69,7 @@ def get_config(config_str="square/mh,sa,1"):
                 StateEncoding.GRIPPER: NormalizationType.GAUSSIAN,
             },
             "image": {
-                "agent": (84, 84),
+                "wrist": (84, 84),
             },
         },
         "action": {
