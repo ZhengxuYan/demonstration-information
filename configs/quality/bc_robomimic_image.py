@@ -34,7 +34,7 @@ def get_config(config_str="square/mh,1"):
                 StateEncoding.GRIPPER: NormalizationType.GAUSSIAN,
             },
             "image": {
-                "agent": (84, 84),
+                "wrist": (84, 84),
             },
         },
         "action": {
@@ -69,7 +69,7 @@ def get_config(config_str="square/mh,1"):
         BehaviorCloning,
         observation_encoder=ModuleSpec.create(
             MultiEncoder,
-            encoders={"observation->state": None, "observation->image->agent": ModuleSpec.create(ResNet18, num_kp=64)},
+            encoders={"observation->state": None, "observation->image->wrist": ModuleSpec.create(ResNet18, num_kp=64)},
             trunk=ModuleSpec.create(
                 Concatenate,
                 model=None,  # Move model to later so we have a bigger ensemble.
