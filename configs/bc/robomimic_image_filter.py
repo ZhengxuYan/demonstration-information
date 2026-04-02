@@ -22,7 +22,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
     # Define the structure
     env, percentile, estimator, seed = config_str.split(",")
     filter_path = os.path.join(
-        "path/to/robomimic_image/inference/",
+        "/iris/u/jasonyan/data/deminf_outputs/robomimic_image_inference/",
         env.replace("/", "_"),
         estimator,
         "seed-" + str(((int(seed) - 1) % 3) + 1),
@@ -53,7 +53,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
     dataloader = dict(
         datasets={
             env.replace("/", "_"): dict(
-                path="path/to/datasets/robomimic_rlds_v2/{env}/1.0.0".format(env=env),
+                path="/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0",
                 train_split="train",
                 val_split="val",
                 transform=ModuleSpec.create(robomimic_dataset_transform),
@@ -106,7 +106,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
     envs = {
         env.replace("/", "_"): ModuleSpec.create(
             RobomimicEnv,
-            path="path/to/datasets/robomimic/{env}/image.hdf5".format(env=env),
+            path="/iris/u/jasonyan/data/robomimic/{env}/image.hdf5".format(env=env),
             horizon=400,
         )
     }

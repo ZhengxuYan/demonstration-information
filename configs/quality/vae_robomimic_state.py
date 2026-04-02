@@ -58,7 +58,7 @@ def get_config(config_str="square/mh,sa,seed"):
     dataloader = dict(
         datasets={
             ds.replace("/", "_"): dict(
-                path="path/to/robomimic_rlds_v2/{ds}/1.0.0".format(ds=ds),
+                path="/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0",
                 train_split="train",
                 val_split="val",
                 transform=ModuleSpec.create(robomimic_dataset_transform),

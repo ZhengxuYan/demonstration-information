@@ -1,7 +1,7 @@
 # Override with correct values for your system if non-default.
-CONDA_PATH=path/to/miniconda3/bin/activate
+CONDA_PATH=/iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 ENV_NAME=openx
-REPO_PATH=path/to/demonstration-info
+REPO_PATH=/iris/u/jasonyan/repos/demonstration-information
 USE_MUJOCO_PY=true # For using mujoco py with RoboMimic
 WANDB_API_KEY="" # If you want to use wandb, set this to your API key.
 
