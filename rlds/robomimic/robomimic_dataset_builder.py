@@ -6,7 +6,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-from openx.envs.robomimic import OBJECT_STATE_SIZE
+# Keep the dataset builder independent from the full robomimic runtime stack.
+OBJECT_STATE_SIZE = 44
 
 
 class RoboMimic(tfds.core.GeneratorBasedBuilder):
