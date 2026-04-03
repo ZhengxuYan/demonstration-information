@@ -275,7 +275,7 @@ def get_dataset_and_score_fn(
     # Add aggregation keys to structure.
     structure = config.structure.to_dict()
     for k in AGGREGATION_KEYS:
-        if k == "dataset_id":
+        if k in ("dataset_id", "step_idx"):
             continue
         structure[k] = None  # Add to the structure with empty field so we include it.
 
