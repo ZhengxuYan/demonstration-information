@@ -16,6 +16,7 @@ from openx.utils.evaluate import load_checkpoint
 
 AGGREGATION_KEYS = [
     "ep_idx",
+    "step_idx",
     "quality_score",
     # "quality_score_continuous", # Enable only if using RoboCrowd.
     "dataset_id",
@@ -286,9 +287,15 @@ def get_dataset_and_score_fn(
 def _aggregate_stats(stats, attrs):
     scores = dict()
     for attr_name, attr in attrs.items():
+        if attr_name == "step_idx":
+            continue
         scores[attr_name] = dict()
         for attr_val in np.unique(attr).tolist():
             scores[attr_name][attr_val] = np.mean(stats[attr == attr_val])
+
+    scores["sample_score"] = stats
+    for attr_name, attr in attrs.items():
+        scores[f"sample_{attr_name}"] = attr
 
     if "ep_idx" in attrs and "quality_score" in attrs:
         scores["quality_by_ep_idx"] = dict()

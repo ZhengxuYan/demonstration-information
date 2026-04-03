@@ -1,6 +1,12 @@
 # Custom Ignores
 wandb/
 _*.json
+image.hdf5
+square_mh_wrist_ksg_seed1/
+square_mh_wrist_review/
+square_mh_wrist_manual_share/
+trajectory_score_plots/
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

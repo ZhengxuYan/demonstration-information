@@ -107,6 +107,8 @@ def make_dataloader(
     def _stepify(ep, dataset_id):
         ep = transforms.concatenate(ep)
         ep = transforms.add_dataset_id(ep, dataset_id)
+        ep_len = tf.shape(tf.nest.flatten(ep["action"])[0])[0]
+        ep["step_idx"] = tf.range(ep_len)
         # Add goal conditioning first (no sequence)
         if goal_conditioning == "uniform":
             ep = transforms.uniform_goal_relabeling(ep)
@@ -125,10 +127,10 @@ def make_dataloader(
 
         # Shuffle and discard.
         if discard_fraction > 0:
-            ep_len = tf.shape(tf.nest.flatten(ep)[0])[0]
-            num_to_keep = tf.maximum(tf.cast(ep_len, tf.float32) * (1 - discard_fraction), 1)
+            step_count = tf.shape(tf.nest.flatten(ep)[0])[0]
+            num_to_keep = tf.maximum(tf.cast(step_count, tf.float32) * (1 - discard_fraction), 1)
             num_to_keep = tf.cast(num_to_keep, tf.int32)
-            idxs = tf.random.shuffle(tf.range(ep_len))[:num_to_keep]
+            idxs = tf.random.shuffle(tf.range(step_count))[:num_to_keep]
             ep = tf.nest.map_structure(lambda x: tf.gather(x, idxs), ep)
 
         return ep
