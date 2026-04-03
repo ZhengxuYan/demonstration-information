@@ -12,14 +12,24 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
+import pickle
 import statistics as st
 from pathlib import Path
+
+import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--review-root", type=Path, required=True, help="Directory containing manifest.csv and category folders.")
     parser.add_argument("--output", type=Path, default=None, help="Output HTML path. Defaults to <review-root>/manual_index.html.")
+    parser.add_argument(
+        "--detailed-scores",
+        type=Path,
+        default=None,
+        help="Optional path to a detailed quality-estimation pickle with sample_score, sample_ep_idx, and sample_step_idx.",
+    )
     return parser.parse_args()
 
 
@@ -49,6 +59,41 @@ def parse_category(root: Path, name: str, by_ep: dict[int, dict[str, object]]) -
         rows.append(row)
     rows.sort(key=lambda row: (-float(row["pred_score"]), int(row["ep_idx"])))
     return rows
+
+
+def load_detailed_traces(path: Path | None) -> dict[int, dict[str, object]]:
+    if path is None or not path.exists():
+        return {}
+
+    with path.open("rb") as f:
+        data = pickle.load(f)
+
+    required = {"sample_score", "sample_ep_idx", "sample_step_idx"}
+    missing = required - set(data)
+    if missing:
+        raise ValueError(f"{path} is missing {sorted(missing)}")
+
+    sample_score = np.asarray(data["sample_score"])
+    sample_ep_idx = np.asarray(data["sample_ep_idx"])
+    sample_step_idx = np.asarray(data["sample_step_idx"])
+
+    traces = {}
+    for ep_idx in np.unique(sample_ep_idx):
+        mask = sample_ep_idx == ep_idx
+        steps = sample_step_idx[mask]
+        scores = sample_score[mask]
+        order = np.argsort(steps)
+        steps = steps[order]
+        scores = scores[order]
+        unique_steps = np.unique(steps)
+        mean_scores = np.array([scores[steps == step].mean() for step in unique_steps], dtype=float)
+        traces[int(ep_idx)] = {
+            "steps": unique_steps.astype(int).tolist(),
+            "scores": mean_scores.tolist(),
+            "min_score": float(mean_scores.min()),
+            "max_score": float(mean_scores.max()),
+        }
+    return traces
 
 
 def summarize(rows: list[dict[str, object]]) -> dict[str, float]:
@@ -85,9 +130,28 @@ def card_html(row: dict[str, object]) -> str:
     human_label = float(row["human_label"])
     num_frames = int(row["num_frames"])
     video_path = html.escape(str(row["manual_video_path"]))
+    trace = row.get("trace")
+    trace_html = ""
+    if trace is not None:
+        trace_html = f"""
+      <div class="trace-wrap">
+        <svg class="trace" viewBox="0 0 300 96" preserveAspectRatio="none"
+             data-steps='{html.escape(json.dumps(trace["steps"]))}'
+             data-scores='{html.escape(json.dumps(trace["scores"]))}'
+             data-num-frames="{num_frames}">
+          <path class="trace-line"></path>
+          <circle class="trace-dot" r="4"></circle>
+        </svg>
+        <div class="trace-caption">
+          <span>step-wise score trace</span>
+          <span class="trace-readout">step 0</span>
+        </div>
+      </div>
+        """
     return f"""
     <article class="card" data-score="{pred_score:.6f}" data-ep="{ep_idx}">
       <video controls preload="metadata" src="{video_path}"></video>
+      {trace_html}
       <div class="meta">
         <div class="title"><strong>demo_{ep_idx}</strong></div>
         <div>pred score: <span class="accent">{pred_score:.6f}</span></div>
@@ -116,10 +180,14 @@ def section_html(title: str, description: str, rows: list[dict[str, object]]) ->
     """
 
 
-def build_page(root: Path, output: Path) -> None:
+def build_page(root: Path, output: Path, detailed_scores: Path | None = None) -> None:
     by_ep = load_manifest(root / "manifest.csv")
+    traces = load_detailed_traces(detailed_scores)
     obs_full = parse_category(root, "obs_full", by_ep)
     obs_partial = parse_category(root, "obs_partial", by_ep)
+    for rows in (obs_full, obs_partial):
+        for row in rows:
+            row["trace"] = traces.get(int(row["ep_idx"]))
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -232,6 +300,44 @@ def build_page(root: Path, output: Path) -> None:
       width: 100%;
       background: #000;
     }}
+    .trace-wrap {{
+      padding: 12px 14px 6px;
+      display: grid;
+      gap: 6px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      background: linear-gradient(180deg, rgba(15, 91, 92, 0.03), rgba(15, 91, 92, 0.01));
+    }}
+    .trace {{
+      width: 100%;
+      height: 96px;
+      overflow: visible;
+    }}
+    .trace-line {{
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    .trace-dot {{
+      fill: #b9472c;
+      stroke: white;
+      stroke-width: 1.5;
+    }}
+    .trace-caption {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
+    .trace-readout {{
+      color: var(--accent);
+      font-weight: 700;
+    }}
     .meta {{
       display: grid;
       gap: 5px;
@@ -273,6 +379,79 @@ def build_page(root: Path, output: Path) -> None:
     {section_html("obs_full", "The square opening remains visible to the wrist camera after grasp, so the task-relevant geometry stays observable.", obs_full)}
     {section_html("obs_partial", "The opening sits behind the handle from the wrist viewpoint, so the task-relevant geometry is partially hidden during execution.", obs_partial)}
   </main>
+  <script>
+    function clamp(value, low, high) {{
+      return Math.max(low, Math.min(high, value));
+    }}
+
+    function buildTrace(svg) {{
+      const steps = JSON.parse(svg.dataset.steps);
+      const scores = JSON.parse(svg.dataset.scores);
+      const numFrames = Number(svg.dataset.numFrames);
+      if (!steps.length || !scores.length) return null;
+
+      const width = 300;
+      const height = 96;
+      const padX = 8;
+      const padY = 10;
+      const minStep = 0;
+      const maxStep = Math.max(numFrames - 1, steps[steps.length - 1], 1);
+      const minScore = Math.min(...scores);
+      const maxScore = Math.max(...scores);
+      const scoreSpan = Math.max(maxScore - minScore, 1e-6);
+      const xFor = (step) => padX + (step / maxStep) * (width - 2 * padX);
+      const yFor = (score) => height - padY - ((score - minScore) / scoreSpan) * (height - 2 * padY);
+
+      const points = steps.map((step, idx) => [xFor(step), yFor(scores[idx])]);
+      svg.querySelector(".trace-line").setAttribute(
+        "d",
+        points.map((point, idx) => (idx === 0 ? "M " : "L ") + point[0].toFixed(2) + " " + point[1].toFixed(2)).join(" ")
+      );
+
+      return {{ steps, scores, points, xFor, yFor, maxStep }};
+    }}
+
+    function interpolateTrace(trace, targetStep) {{
+      const steps = trace.steps;
+      const scores = trace.scores;
+      if (targetStep <= steps[0]) return {{ step: targetStep, score: scores[0] }};
+      if (targetStep >= steps[steps.length - 1]) return {{ step: targetStep, score: scores[scores.length - 1] }};
+      for (let i = 1; i < steps.length; i++) {{
+        if (targetStep <= steps[i]) {{
+          const leftStep = steps[i - 1];
+          const rightStep = steps[i];
+          const alpha = (targetStep - leftStep) / Math.max(rightStep - leftStep, 1e-6);
+          const score = scores[i - 1] + alpha * (scores[i] - scores[i - 1]);
+          return {{ step: targetStep, score }};
+        }}
+      }}
+      return {{ step: targetStep, score: scores[scores.length - 1] }};
+    }}
+
+    document.querySelectorAll(".card").forEach((card) => {{
+      const svg = card.querySelector(".trace");
+      const video = card.querySelector("video");
+      if (!svg || !video) return;
+      const trace = buildTrace(svg);
+      if (!trace) return;
+      const dot = svg.querySelector(".trace-dot");
+      const readout = card.querySelector(".trace-readout");
+
+      const update = () => {{
+        const frac = video.duration ? clamp(video.currentTime / video.duration, 0, 1) : 0;
+        const targetStep = frac * trace.maxStep;
+        const point = interpolateTrace(trace, targetStep);
+        dot.setAttribute("cx", trace.xFor(point.step).toFixed(2));
+        dot.setAttribute("cy", trace.yFor(point.score).toFixed(2));
+        readout.textContent = "step " + Math.round(point.step) + " | score " + point.score.toFixed(3);
+      }};
+
+      video.addEventListener("loadedmetadata", update);
+      video.addEventListener("timeupdate", update);
+      video.addEventListener("seeked", update);
+      update();
+    }});
+  </script>
 </body>
 </html>
 """
@@ -282,7 +461,7 @@ def build_page(root: Path, output: Path) -> None:
 def main() -> None:
     args = parse_args()
     output = args.output or (args.review_root / "manual_index.html")
-    build_page(args.review_root, output)
+    build_page(args.review_root, output, detailed_scores=args.detailed_scores)
     print(output)
 
 
