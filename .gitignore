@@ -169,3 +169,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 square_mh_wrist_ksg_detailed_v2/
+robomimic/
+fb_demos/
+.venv-robomimic/

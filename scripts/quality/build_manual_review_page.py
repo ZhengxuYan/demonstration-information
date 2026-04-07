@@ -138,7 +138,16 @@ def card_html(row: dict[str, object]) -> str:
         <svg class="trace" viewBox="0 0 300 96" preserveAspectRatio="none"
              data-steps='{html.escape(json.dumps(trace["steps"]))}'
              data-scores='{html.escape(json.dumps(trace["scores"]))}'
+             data-min-score="{trace["min_score"]:.6f}"
+             data-max-score="{trace["max_score"]:.6f}"
              data-num-frames="{num_frames}">
+          <line class="trace-axis" x1="42" y1="10" x2="42" y2="86"></line>
+          <line class="trace-grid" x1="42" y1="10" x2="292" y2="10"></line>
+          <line class="trace-grid" x1="42" y1="48" x2="292" y2="48"></line>
+          <line class="trace-grid" x1="42" y1="86" x2="292" y2="86"></line>
+          <text class="trace-tick trace-tick-top" x="38" y="14"></text>
+          <text class="trace-tick trace-tick-mid" x="38" y="52"></text>
+          <text class="trace-tick trace-tick-bottom" x="38" y="90"></text>
           <path class="trace-line"></path>
           <circle class="trace-dot" r="4"></circle>
         </svg>
@@ -313,6 +322,21 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       height: 96px;
       overflow: visible;
     }}
+    .trace-axis {{
+      stroke: rgba(31, 27, 23, 0.45);
+      stroke-width: 1.2;
+    }}
+    .trace-grid {{
+      stroke: rgba(15, 91, 92, 0.12);
+      stroke-width: 1;
+      stroke-dasharray: 3 3;
+    }}
+    .trace-tick {{
+      fill: var(--muted);
+      font-size: 10px;
+      text-anchor: end;
+      font-family: "Iowan Old Style", "Palatino Linotype", serif;
+    }}
     .trace-line {{
       fill: none;
       stroke: var(--accent);
@@ -392,15 +416,21 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
 
       const width = 300;
       const height = 96;
-      const padX = 8;
+      const axisX = 42;
+      const padX = axisX;
       const padY = 10;
       const minStep = 0;
       const maxStep = Math.max(numFrames - 1, steps[steps.length - 1], 1);
       const minScore = Math.min(...scores);
       const maxScore = Math.max(...scores);
+      const midScore = (minScore + maxScore) / 2;
       const scoreSpan = Math.max(maxScore - minScore, 1e-6);
       const xFor = (step) => padX + (step / maxStep) * (width - 2 * padX);
       const yFor = (score) => height - padY - ((score - minScore) / scoreSpan) * (height - 2 * padY);
+
+      svg.querySelector(".trace-tick-top").textContent = maxScore.toFixed(2);
+      svg.querySelector(".trace-tick-mid").textContent = midScore.toFixed(2);
+      svg.querySelector(".trace-tick-bottom").textContent = minScore.toFixed(2);
 
       const points = steps.map((step, idx) => [xFor(step), yFor(scores[idx])]);
       svg.querySelector(".trace-line").setAttribute(
