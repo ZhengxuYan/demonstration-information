@@ -122,6 +122,10 @@ def normalize_tree(tree: Dict, structure: Dict, stats: Dict) -> Dict:
     return out
 
 
+def stats_subtree(stats: Dict, key: str) -> Dict:
+    return {name: value[key] for name, value in stats.items() if name in ("mean", "std", "min", "max")}
+
+
 def concatenate_ordered(tree: Dict) -> np.ndarray:
     flat = []
     for value in tree.values():
@@ -202,10 +206,10 @@ def load_hdf5_dataset(spec: DatasetSpec, dataset_id: int, obs_structure: Dict, a
             }
 
             normalized_obs = {
-                "state": normalize_tree(raw_obs["state"], obs_structure["state"], {k: v["state"] for k, v in stats.items()}),
+                "state": normalize_tree(raw_obs["state"], obs_structure["state"], stats_subtree(stats, "state")),
                 "image": raw_obs["image"],
             }
-            normalized_action = normalize_tree(raw_action, action_structure, {k: v["action"] for k, v in stats.items()})
+            normalized_action = normalize_tree(raw_action, action_structure, stats_subtree(stats, "action"))
 
             ep = chunk_episode(
                 observation={
