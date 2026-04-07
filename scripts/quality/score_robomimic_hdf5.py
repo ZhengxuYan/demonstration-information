@@ -106,18 +106,32 @@ def _normalize(x, mode: str, mean, std, low, high):
 
 
 def normalize_tree(tree: Dict, structure: Dict, stats: Dict) -> Dict:
+    def _child_stats(current_stats: Dict, current_key: str) -> Dict:
+        if all(name in current_stats for name in ("mean", "std", "min", "max")):
+            return {name: current_stats[name][current_key] for name in ("mean", "std", "min", "max")}
+        if current_key in current_stats:
+            return current_stats[current_key]
+        raise KeyError(f"Could not find stats for key {current_key}")
+
+    def _leaf_stat(current_stats: Dict, stat_name: str, current_key: str):
+        if stat_name in current_stats:
+            return current_stats[stat_name][current_key]
+        if current_key in current_stats and stat_name in current_stats[current_key]:
+            return current_stats[current_key][stat_name]
+        raise KeyError(f"Could not find {stat_name} stats for key {current_key}")
+
     out = {}
     for key, substructure in structure.items():
         if isinstance(substructure, dict):
-            out[key] = normalize_tree(tree[key], substructure, {k: v[key] for k, v in stats.items()})
+            out[key] = normalize_tree(tree[key], substructure, _child_stats(stats, key))
         else:
             out[key] = _normalize(
                 np.asarray(tree[key], dtype=np.float32),
                 str(substructure),
-                np.asarray(stats["mean"][key], dtype=np.float32),
-                np.asarray(stats["std"][key], dtype=np.float32),
-                np.asarray(stats["min"][key], dtype=np.float32),
-                np.asarray(stats["max"][key], dtype=np.float32),
+                np.asarray(_leaf_stat(stats, "mean", key), dtype=np.float32),
+                np.asarray(_leaf_stat(stats, "std", key), dtype=np.float32),
+                np.asarray(_leaf_stat(stats, "min", key), dtype=np.float32),
+                np.asarray(_leaf_stat(stats, "max", key), dtype=np.float32),
             )
     return out
 
