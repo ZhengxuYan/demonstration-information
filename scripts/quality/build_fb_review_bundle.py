@@ -1,52 +1,44 @@
 """
-Build a static review page for manually categorized demo videos.
+Build a static review bundle for forward/backward grab demos.
+
+This copies demo mp4s into a share folder and creates an index.html with the
+same card layout and synchronized score traces used for the square wrist review.
 
 Example:
 
-python scripts/quality/build_manual_review_page.py \
-    --review-root /Users/jasonyan/Desktop/demonstration-information/square_mh_wrist_review
+python scripts/quality/build_fb_review_bundle.py \
+  --source-root /Users/jasonyan/Desktop/demonstration-information/fb_demos \
+  --scores-root /Users/jasonyan/Desktop/demonstration-information/fb_demos_scores \
+  --output-root /Users/jasonyan/Desktop/demonstration-information/fb_demos_manual_share
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 import json
 import pickle
+import shutil
 import statistics as st
+import subprocess
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--review-root", type=Path, required=True, help="Directory containing manifest.csv and category folders.")
-    parser.add_argument("--output", type=Path, default=None, help="Output HTML path. Defaults to <review-root>/manual_index.html.")
-    parser.add_argument(
-        "--detailed-scores",
-        type=Path,
-        default=None,
-        help="Optional path to a detailed quality-estimation pickle with sample_score, sample_ep_idx, and sample_step_idx.",
-    )
+    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--scores-root", type=Path, required=True)
+    parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
-def load_manifest(path: Path) -> dict[int, dict[str, object]]:
-    by_ep = {}
-    with path.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            ep_idx = int(row["ep_idx"])
-            by_ep[ep_idx] = {
-                "ep_idx": ep_idx,
-                "pred_score": float(row["pred_score"]),
-                "human_label": float(row["human_label"]),
-                "video_path": row["video_path"],
-                "num_frames": int(row["num_frames"]),
-            }
-    return by_ep
+def load_scores(path: Path) -> dict:
+    with path.open("rb") as f:
+        return pickle.load(f)
 
 
 def smooth_scores(scores: np.ndarray, window: int = 9) -> np.ndarray:
@@ -60,30 +52,7 @@ def smooth_scores(scores: np.ndarray, window: int = 9) -> np.ndarray:
     return np.convolve(padded, kernel, mode="valid")
 
 
-def parse_category(root: Path, name: str, by_ep: dict[int, dict[str, object]]) -> list[dict[str, object]]:
-    rows = []
-    for path in sorted((root / name).glob("*.mp4")):
-        ep_idx = int(path.stem.split("_")[1])
-        row = dict(by_ep[ep_idx])
-        row["category"] = name
-        row["manual_video_path"] = str(path.relative_to(root))
-        rows.append(row)
-    rows.sort(key=lambda row: (-float(row["pred_score"]), int(row["ep_idx"])))
-    return rows
-
-
-def load_detailed_traces(path: Path | None) -> dict[int, dict[str, object]]:
-    if path is None or not path.exists():
-        return {}
-
-    with path.open("rb") as f:
-        data = pickle.load(f)
-
-    required = {"sample_score", "sample_ep_idx", "sample_step_idx"}
-    missing = required - set(data)
-    if missing:
-        raise ValueError(f"{path} is missing {sorted(missing)}")
-
+def trace_map(data: dict) -> dict[int, dict[str, object]]:
     sample_score = np.asarray(data["sample_score"])
     sample_ep_idx = np.asarray(data["sample_ep_idx"])
     sample_step_idx = np.asarray(data["sample_step_idx"])
@@ -104,8 +73,68 @@ def load_detailed_traces(path: Path | None) -> dict[int, dict[str, object]]:
             "scores": smooth_mean_scores.tolist(),
             "min_score": float(smooth_mean_scores.min()),
             "max_score": float(smooth_mean_scores.max()),
+            "num_frames": int(unique_steps.max()) + 1,
         }
     return traces
+
+
+def format_score(score: float) -> str:
+    return f"{score:.4f}"
+
+
+def write_video(video_path: Path, frames: np.ndarray, fps: int = 20) -> int:
+    num_frames = len(frames)
+    if num_frames == 0:
+        raise ValueError(f"No frames found for {video_path.name}")
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        raise RuntimeError("ffmpeg is required to build the FB wrist-view review bundle")
+
+    sample = np.asarray(frames[0], dtype=np.uint8)
+    height, width, channels = sample.shape
+    if channels != 3:
+        raise ValueError(f"Expected RGB frames, got shape {sample.shape}")
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-an",
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(video_path),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        assert proc.stdin is not None
+        for frame in frames:
+            arr = np.asarray(frame, dtype=np.uint8)
+            if arr.shape != sample.shape:
+                raise ValueError(f"Inconsistent frame shape {arr.shape} for {video_path}")
+            proc.stdin.write(arr.tobytes())
+        proc.stdin.close()
+        return_code = proc.wait()
+    except Exception:
+        proc.kill()
+        proc.wait()
+        raise
+
+    if return_code != 0:
+        stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr is not None else ""
+        raise RuntimeError(f"ffmpeg failed for {video_path}: {stderr}")
+    return num_frames
 
 
 def summarize(rows: list[dict[str, object]]) -> dict[str, float]:
@@ -139,13 +168,12 @@ def summary_table(summary: dict[str, float]) -> str:
 def card_html(row: dict[str, object]) -> str:
     ep_idx = int(row["ep_idx"])
     pred_score = float(row["pred_score"])
-    human_label = float(row["human_label"])
+    label = float(row["category_label"])
     num_frames = int(row["num_frames"])
-    video_path = html.escape(str(row["manual_video_path"]))
-    trace = row.get("trace")
-    trace_html = ""
-    if trace is not None:
-        trace_html = f"""
+    video_path = html.escape(str(row["video_path"]))
+    video_url = html.escape(str(row["video_url"]))
+    trace = row["trace"]
+    trace_html = f"""
       <div class="trace-wrap">
         <svg class="trace" viewBox="0 0 300 96" preserveAspectRatio="none"
              data-steps='{html.escape(json.dumps(trace["steps"]))}'
@@ -168,15 +196,15 @@ def card_html(row: dict[str, object]) -> str:
           <span class="trace-readout">step 0</span>
         </div>
       </div>
-        """
+    """
     return f"""
     <article class="card" data-score="{pred_score:.6f}" data-ep="{ep_idx}">
-      <video controls preload="metadata" src="{video_path}"></video>
+      <video controls preload="metadata" src="{video_url}"></video>
       {trace_html}
       <div class="meta">
         <div class="title"><strong>demo_{ep_idx}</strong></div>
         <div>pred score: <span class="accent">{pred_score:.6f}</span></div>
-        <div>human label: {human_label:.1f}</div>
+        <div>category label: {label:.1f}</div>
         <div>frames: {num_frames}</div>
         <div class="path">{video_path}</div>
       </div>
@@ -201,21 +229,13 @@ def section_html(title: str, description: str, rows: list[dict[str, object]]) ->
     """
 
 
-def build_page(root: Path, output: Path, detailed_scores: Path | None = None) -> None:
-    by_ep = load_manifest(root / "manifest.csv")
-    traces = load_detailed_traces(detailed_scores)
-    obs_full = parse_category(root, "obs_full", by_ep)
-    obs_partial = parse_category(root, "obs_partial", by_ep)
-    for rows in (obs_full, obs_partial):
-        for row in rows:
-            row["trace"] = traces.get(int(row["ep_idx"]))
-
+def build_page(output: Path, forward_rows: list[dict[str, object]], backward_rows: list[dict[str, object]]) -> None:
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>square/mh wrist visibility review</title>
+  <title>forward/backward grab review</title>
   <style>
     :root {{
       color-scheme: light;
@@ -226,7 +246,6 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       --border: #d9d0c0;
       --accent: #0f5b5c;
       --accent-soft: #d9ece7;
-      --warn-soft: #efe2d0;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -246,10 +265,7 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       z-index: 2;
       backdrop-filter: blur(10px);
     }}
-    h1 {{
-      margin: 0 0 8px;
-      font-size: 30px;
-    }}
+    h1 {{ margin: 0 0 8px; font-size: 30px; }}
     .lede {{
       margin: 0;
       max-width: 900px;
@@ -257,181 +273,62 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       line-height: 1.5;
       font-size: 15px;
     }}
-    main {{
-      padding: 24px;
-      display: grid;
-      gap: 28px;
-    }}
-    .section {{
-      display: grid;
-      gap: 16px;
-    }}
-    .section-head {{
-      display: grid;
-      gap: 12px;
-      align-items: start;
-    }}
-    h2 {{
-      margin: 0 0 4px;
-      font-size: 24px;
-    }}
-    .section-head p {{
-      margin: 0;
-      color: var(--muted);
-      max-width: 800px;
-      line-height: 1.5;
-    }}
-    .stat-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-      gap: 10px;
-    }}
-    .stat {{
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px 12px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
-    }}
-    .stat span {{
-      display: block;
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }}
-    .stat strong {{
-      font-size: 18px;
-    }}
-    .cards {{
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 16px;
-    }}
-    .card {{
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
-    }}
-    video {{
-      display: block;
-      width: 100%;
-      background: #000;
-    }}
-    .trace-wrap {{
-      padding: 12px 14px 6px;
-      display: grid;
-      gap: 6px;
-      border-top: 1px solid var(--border);
-      border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-      background: linear-gradient(180deg, rgba(15, 91, 92, 0.03), rgba(15, 91, 92, 0.01));
-    }}
-    .trace {{
-      width: 100%;
-      height: 96px;
-      overflow: visible;
-    }}
-    .trace-axis {{
-      stroke: rgba(31, 27, 23, 0.45);
-      stroke-width: 1.2;
-    }}
-    .trace-grid {{
-      stroke: rgba(15, 91, 92, 0.12);
-      stroke-width: 1;
-      stroke-dasharray: 3 3;
-    }}
-    .trace-tick {{
-      fill: var(--muted);
-      font-size: 10px;
-      text-anchor: end;
-      font-family: "Iowan Old Style", "Palatino Linotype", serif;
-    }}
-    .trace-line {{
-      fill: none;
-      stroke: var(--accent);
-      stroke-width: 2.5;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }}
-    .trace-dot {{
-      fill: #b9472c;
-      stroke: white;
-      stroke-width: 1.5;
-    }}
-    .trace-caption {{
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }}
-    .trace-readout {{
-      color: var(--accent);
-      font-weight: 700;
-    }}
-    .meta {{
-      display: grid;
-      gap: 5px;
-      padding: 12px 14px 14px;
-      font-size: 14px;
-    }}
-    .title {{
-      font-size: 16px;
-    }}
-    .path {{
-      color: var(--muted);
-      font-size: 12px;
-      word-break: break-all;
-    }}
-    .accent {{
-      color: var(--accent);
-      font-weight: 700;
-    }}
-    .summary-banner {{
-      background: var(--accent-soft);
-      border: 1px solid rgba(15, 91, 92, 0.15);
-      border-radius: 14px;
-      padding: 14px 16px;
-      line-height: 1.5;
-    }}
+    main {{ padding: 24px; display: grid; gap: 28px; }}
+    .section {{ display: grid; gap: 16px; }}
+    .section-head {{ display: grid; gap: 12px; align-items: start; }}
+    h2 {{ margin: 0 0 4px; font-size: 24px; }}
+    .section-head p {{ margin: 0; color: var(--muted); max-width: 800px; line-height: 1.5; }}
+    .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }}
+    .stat {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04); }}
+    .stat span {{ display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }}
+    .stat strong {{ font-size: 18px; }}
+    .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }}
+    .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); }}
+    video {{ display: block; width: 100%; background: #000; }}
+    .trace-wrap {{ padding: 12px 14px 6px; display: grid; gap: 6px; border-top: 1px solid var(--border); border-bottom: 1px solid rgba(0, 0, 0, 0.04); background: linear-gradient(180deg, rgba(15, 91, 92, 0.03), rgba(15, 91, 92, 0.01)); }}
+    .trace {{ width: 100%; height: 96px; overflow: visible; }}
+    .trace-axis {{ stroke: rgba(31, 27, 23, 0.45); stroke-width: 1.2; }}
+    .trace-grid {{ stroke: rgba(15, 91, 92, 0.12); stroke-width: 1; stroke-dasharray: 3 3; }}
+    .trace-tick {{ fill: var(--muted); font-size: 10px; text-anchor: end; font-family: "Iowan Old Style", "Palatino Linotype", serif; }}
+    .trace-line {{ fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }}
+    .trace-dot {{ fill: #b9472c; stroke: white; stroke-width: 1.5; }}
+    .trace-caption {{ display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
+    .trace-readout {{ color: var(--accent); font-weight: 700; }}
+    .meta {{ display: grid; gap: 5px; padding: 12px 14px 14px; font-size: 14px; }}
+    .title {{ font-size: 16px; }}
+    .path {{ color: var(--muted); font-size: 12px; word-break: break-all; }}
+    .accent {{ color: var(--accent); font-weight: 700; }}
+    .summary-banner {{ background: var(--accent-soft); border: 1px solid rgba(15, 91, 92, 0.15); border-radius: 14px; padding: 14px 16px; line-height: 1.5; }}
   </style>
 </head>
 <body>
   <header>
-    <h1>square/mh wrist visibility review</h1>
+    <h1>forward/backward grab review</h1>
     <p class="lede">
-      Manually categorized human-label-3 demonstrations from the wrist-only DemInf analysis. Videos are grouped by whether the wrist camera fully sees the square opening during the key manipulation phase (<strong>obs_full</strong>) or whether the opening is partially occluded by the handle (<strong>obs_partial</strong>).
+      Category-level DemInf scores for the custom forward-grab and backward-grab robosuite demos. Each card shows the demo video, its trajectory score, and a synchronized step-wise score trace.
     </p>
   </header>
   <main>
     <div class="summary-banner">
-      <strong>Key result:</strong> the manually labeled <code>obs_full</code> demos have higher DemInf scores on average than <code>obs_partial</code> demos in this wrist-only setup.
+      <strong>Setup:</strong> scores were computed with the existing square wrist observation VAE and action VAE, then grouped into <code>forward_grab</code> and <code>backward_grab</code>.
     </div>
-    {section_html("obs_full", "The square opening remains visible to the wrist camera after grasp, so the task-relevant geometry stays observable.", obs_full)}
-    {section_html("obs_partial", "The opening sits behind the handle from the wrist viewpoint, so the task-relevant geometry is partially hidden during execution.", obs_partial)}
+    {section_html("forward_grab", "Demos where the handle is grasped with the opening facing forward relative to the wrist camera.", forward_rows)}
+    {section_html("backward_grab", "Demos where the handle is grasped with the opening facing backward relative to the wrist camera.", backward_rows)}
   </main>
   <script>
     function clamp(value, low, high) {{
       return Math.max(low, Math.min(high, value));
     }}
-
     function buildTrace(svg) {{
       const steps = JSON.parse(svg.dataset.steps);
       const scores = JSON.parse(svg.dataset.scores);
       const numFrames = Number(svg.dataset.numFrames);
       if (!steps.length || !scores.length) return null;
-
       const width = 300;
       const height = 96;
       const axisX = 42;
       const padX = axisX;
       const padY = 10;
-      const minStep = 0;
       const maxStep = Math.max(numFrames - 1, steps[steps.length - 1], 1);
       const minScore = Math.min(...scores);
       const maxScore = Math.max(...scores);
@@ -439,20 +336,16 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       const scoreSpan = Math.max(maxScore - minScore, 1e-6);
       const xFor = (step) => padX + (step / maxStep) * (width - 2 * padX);
       const yFor = (score) => height - padY - ((score - minScore) / scoreSpan) * (height - 2 * padY);
-
       svg.querySelector(".trace-tick-top").textContent = maxScore.toFixed(2);
       svg.querySelector(".trace-tick-mid").textContent = midScore.toFixed(2);
       svg.querySelector(".trace-tick-bottom").textContent = minScore.toFixed(2);
-
       const points = steps.map((step, idx) => [xFor(step), yFor(scores[idx])]);
       svg.querySelector(".trace-line").setAttribute(
         "d",
         points.map((point, idx) => (idx === 0 ? "M " : "L ") + point[0].toFixed(2) + " " + point[1].toFixed(2)).join(" ")
       );
-
-      return {{ steps, scores, points, xFor, yFor, maxStep }};
+      return {{ steps, scores, xFor, yFor, maxStep }};
     }}
-
     function interpolateTrace(trace, targetStep) {{
       const steps = trace.steps;
       const scores = trace.scores;
@@ -469,7 +362,6 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       }}
       return {{ step: targetStep, score: scores[scores.length - 1] }};
     }}
-
     document.querySelectorAll(".card").forEach((card) => {{
       const svg = card.querySelector(".trace");
       const video = card.querySelector("video");
@@ -478,7 +370,6 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
       if (!trace) return;
       const dot = svg.querySelector(".trace-dot");
       const readout = card.querySelector(".trace-readout");
-
       const update = () => {{
         const frac = video.duration ? clamp(video.currentTime / video.duration, 0, 1) : 0;
         const targetStep = frac * trace.maxStep;
@@ -487,7 +378,6 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
         dot.setAttribute("cy", trace.yFor(point.score).toFixed(2));
         readout.textContent = "step " + Math.round(point.step) + " | score " + point.score.toFixed(3);
       }};
-
       video.addEventListener("loadedmetadata", update);
       video.addEventListener("timeupdate", update);
       video.addEventListener("seeked", update);
@@ -502,9 +392,63 @@ def build_page(root: Path, output: Path, detailed_scores: Path | None = None) ->
 
 def main() -> None:
     args = parse_args()
-    output = args.output or (args.review_root / "manual_index.html")
-    build_page(args.review_root, output, detailed_scores=args.detailed_scores)
-    print(output)
+    args.output_root.mkdir(parents=True, exist_ok=True)
+
+    def first_run_dir(category_root: Path) -> Path:
+        run_dirs = sorted(path for path in category_root.iterdir() if path.is_dir())
+        if not run_dirs:
+            raise ValueError(f"No run directory found under {category_root}")
+        return run_dirs[0]
+
+    categories = {
+        "forward_grab": {
+            "video_dir": first_run_dir(args.source_root / "forward_grab"),
+            "hdf5_path": first_run_dir(args.source_root / "forward_grab") / "image.hdf5",
+            "score_path": args.scores_root / "forward_grab.pkl",
+            "label": 1.0,
+        },
+        "backward_grab": {
+            "video_dir": first_run_dir(args.source_root / "backward_grab"),
+            "hdf5_path": first_run_dir(args.source_root / "backward_grab") / "image.hdf5",
+            "score_path": args.scores_root / "backward_grab.pkl",
+            "label": 0.0,
+        },
+    }
+
+    rows_by_category: dict[str, list[dict[str, object]]] = {}
+    for category, info in categories.items():
+        category_out = args.output_root / category
+        category_out.mkdir(parents=True, exist_ok=True)
+
+        data = load_scores(info["score_path"])
+        traces = trace_map(data)
+        rows = []
+        with h5py.File(info["hdf5_path"], "r") as f:
+            for ep_idx, pred_score in sorted(data["ep_idx"].items(), key=lambda kv: (-kv[1], kv[0])):
+                demo_key = f"demo_{int(ep_idx)}"
+                if demo_key not in f["data"]:
+                    continue
+                trace = traces[int(ep_idx)]
+                out_name = f"demo_{int(ep_idx):04d}_score_{format_score(float(pred_score))}_label_{int(info['label'])}.mp4"
+                dest_video = category_out / out_name
+                if args.overwrite or not dest_video.exists():
+                    frames = f["data"][demo_key]["obs"]["robot0_eye_in_hand_image"][:]
+                    write_video(dest_video, frames)
+                rows.append(
+                    {
+                        "ep_idx": int(ep_idx),
+                        "pred_score": float(pred_score),
+                        "category_label": float(info["label"]),
+                        "num_frames": int(trace["num_frames"]),
+                        "video_path": str(dest_video.relative_to(args.output_root)),
+                        "video_url": f"{dest_video.relative_to(args.output_root)}?v={int(dest_video.stat().st_mtime_ns)}",
+                        "trace": trace,
+                    }
+                )
+        rows_by_category[category] = rows
+
+    build_page(args.output_root / "index.html", rows_by_category["forward_grab"], rows_by_category["backward_grab"])
+    print(args.output_root / "index.html")
 
 
 if __name__ == "__main__":

@@ -76,6 +76,16 @@ def parse_args():
     )
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--output", required=True, help="Output directory for pickle and plots.")
+    parser.add_argument(
+        "--shared-normalization",
+        action="store_true",
+        help="Normalize all provided datasets together instead of each dataset independently.",
+    )
+    parser.add_argument(
+        "--reference-score-pkl",
+        default=None,
+        help="Optional pickle with sample_score used only to define the clipping and normalization scale.",
+    )
     return parser.parse_args()
 
 
@@ -300,6 +310,15 @@ def aggregate_scores(stats_array: np.ndarray, attrs: Dict[str, np.ndarray]) -> D
     return scores
 
 
+def normalize_scores(stats_array: np.ndarray, reference_scores: np.ndarray | None = None) -> np.ndarray:
+    reference = stats_array if reference_scores is None else reference_scores
+    clipped = np.clip(stats_array, a_min=np.percentile(reference, 1), a_max=np.percentile(reference, 99))
+    std = np.std(reference)
+    if std == 0:
+        std = 1.0
+    return (clipped - np.mean(reference)) / std
+
+
 def save_plots(ds_scores: Dict, out_dir: str, ds_name: str):
     if "quality_by_ep_idx" not in ds_scores:
         return
@@ -363,6 +382,13 @@ def main():
         )
     )
 
+    reference_scores = None
+    if args.reference_score_pkl is not None:
+        with open(args.reference_score_pkl, "rb") as f:
+            reference_data = pickle.load(f)
+        reference_scores = np.asarray(reference_data["sample_score"], dtype=np.float32)
+
+    dataset_results = []
     for dataset_id, spec in enumerate(dataset_specs):
         episodes = load_hdf5_dataset(
             spec,
@@ -386,10 +412,22 @@ def main():
 
         stats_array = np.concatenate(stats_list, axis=0)
         attrs = {k: np.concatenate(v, axis=0) for k, v in attrs.items()}
+        dataset_results.append((spec, stats_array, attrs))
 
-        stats_array = np.clip(stats_array, a_min=np.percentile(stats_array, 1), a_max=np.percentile(stats_array, 99))
-        stats_array = (stats_array - np.mean(stats_array)) / np.std(stats_array)
+    if args.shared_normalization:
+        combined_stats = np.concatenate([stats_array for _, stats_array, _ in dataset_results], axis=0)
+        normalized_by_name = {
+            spec.name: normalize_scores(stats_array, reference_scores if reference_scores is not None else combined_stats)
+            for spec, stats_array, _ in dataset_results
+        }
+    else:
+        normalized_by_name = {
+            spec.name: normalize_scores(stats_array, reference_scores)
+            for spec, stats_array, _ in dataset_results
+        }
 
+    for spec, _, attrs in dataset_results:
+        stats_array = normalized_by_name[spec.name]
         scores = aggregate_scores(stats_array, attrs)
         with open(os.path.join(args.output, spec.name + ".pkl"), "wb") as f:
             pickle.dump(scores, f)
