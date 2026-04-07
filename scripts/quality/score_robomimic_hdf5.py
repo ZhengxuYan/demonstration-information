@@ -114,10 +114,10 @@ def normalize_tree(tree: Dict, structure: Dict, stats: Dict) -> Dict:
             out[key] = _normalize(
                 np.asarray(tree[key], dtype=np.float32),
                 str(substructure),
-                np.asarray(stats["mean"], dtype=np.float32),
-                np.asarray(stats["std"], dtype=np.float32),
-                np.asarray(stats["min"], dtype=np.float32),
-                np.asarray(stats["max"], dtype=np.float32),
+                np.asarray(stats["mean"][key], dtype=np.float32),
+                np.asarray(stats["std"][key], dtype=np.float32),
+                np.asarray(stats["min"][key], dtype=np.float32),
+                np.asarray(stats["max"][key], dtype=np.float32),
             )
     return out
 
