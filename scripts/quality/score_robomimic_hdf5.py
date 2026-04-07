@@ -344,6 +344,8 @@ def main():
     os.makedirs(args.output, exist_ok=True)
 
     obs_alg, obs_state, dataset_statistics, obs_config = load_checkpoint(args.obs_ckpt)
+    if "mean" not in dataset_statistics and len(dataset_statistics) == 1:
+        dataset_statistics = next(iter(dataset_statistics.values()))
     action_alg, action_state, _, _ = load_checkpoint(args.action_ckpt)
 
     obs_structure = obs_config.structure["observation"].to_dict()
