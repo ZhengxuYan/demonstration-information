@@ -287,7 +287,9 @@ def stack_batches(episodes: Iterable[Dict], batch_size: int):
         }
 
 
-def aggregate_scores(stats_array: np.ndarray, attrs: Dict[str, np.ndarray]) -> Dict:
+def aggregate_scores(
+    stats_array: np.ndarray, attrs: Dict[str, np.ndarray], raw_stats_array: np.ndarray | None = None
+) -> Dict:
     scores = {}
     for attr_name, attr in attrs.items():
         if attr_name == "step_idx":
@@ -299,6 +301,8 @@ def aggregate_scores(stats_array: np.ndarray, attrs: Dict[str, np.ndarray]) -> D
             )
 
     scores["sample_score"] = stats_array
+    if raw_stats_array is not None:
+        scores["raw_sample_score"] = raw_stats_array
     for attr_name, attr in attrs.items():
         scores[f"sample_{attr_name}"] = attr
 
@@ -386,7 +390,12 @@ def main():
     if args.reference_score_pkl is not None:
         with open(args.reference_score_pkl, "rb") as f:
             reference_data = pickle.load(f)
-        reference_scores = np.asarray(reference_data["sample_score"], dtype=np.float32)
+        if "raw_sample_score" not in reference_data:
+            raise ValueError(
+                f"{args.reference_score_pkl} is missing raw_sample_score. "
+                "Regenerate the reference scores with the updated quality estimation code."
+            )
+        reference_scores = np.asarray(reference_data["raw_sample_score"], dtype=np.float32)
 
     dataset_results = []
     for dataset_id, spec in enumerate(dataset_specs):
@@ -426,9 +435,9 @@ def main():
             for spec, stats_array, _ in dataset_results
         }
 
-    for spec, _, attrs in dataset_results:
+    for spec, raw_stats_array, attrs in dataset_results:
         stats_array = normalized_by_name[spec.name]
-        scores = aggregate_scores(stats_array, attrs)
+        scores = aggregate_scores(stats_array, attrs, raw_stats_array=raw_stats_array)
         with open(os.path.join(args.output, spec.name + ".pkl"), "wb") as f:
             pickle.dump(scores, f)
         save_plots(scores, args.output, spec.name)

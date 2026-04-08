@@ -284,7 +284,7 @@ def get_dataset_and_score_fn(
     return ds, wrapped_pred_fn, dataset_ids
 
 
-def _aggregate_stats(stats, attrs):
+def _aggregate_stats(stats, attrs, raw_stats=None):
     scores = dict()
     for attr_name, attr in attrs.items():
         if attr_name == "step_idx":
@@ -294,6 +294,8 @@ def _aggregate_stats(stats, attrs):
             scores[attr_name][attr_val] = np.mean(stats[attr == attr_val])
 
     scores["sample_score"] = stats
+    if raw_stats is not None:
+        scores["raw_sample_score"] = raw_stats
     for attr_name, attr in attrs.items():
         scores[f"sample_{attr_name}"] = attr
 
@@ -331,6 +333,8 @@ def estimate_quality(ds, pred_fn, dataset_ids, rng):
     stats = jnp.concatenate(stats, axis=0)
     attributes = {k: jnp.concatenate(v, axis=0) for k, v in attributes.items()}
 
+    raw_stats = np.array(stats)
+
     # Normalize
     stats = jnp.clip(stats, a_min=jnp.percentile(stats, 1), a_max=jnp.percentile(stats, 99))
     stats = (stats - jnp.mean(stats)) / jnp.std(stats)
@@ -343,6 +347,8 @@ def estimate_quality(ds, pred_fn, dataset_ids, rng):
     scores = dict()
     for ds_name, ds_id in dataset_ids.items():
         mask = attributes["dataset_id"] == ds_id
-        scores[ds_name] = _aggregate_stats(stats[mask], {k: v[mask] for k, v in attributes.items()})
+        scores[ds_name] = _aggregate_stats(
+            stats[mask], {k: v[mask] for k, v in attributes.items()}, raw_stats=raw_stats[mask]
+        )
 
     return scores
