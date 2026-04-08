@@ -147,19 +147,24 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
         """
         dataset_path = os.path.join(dl_manager.manual_dir, "image.hdf5")
         language_instruction = self._infer_language_instruction(dataset_path)
+        with h5py.File(dataset_path, "r") as f:
+            mask_group = f.get("mask")
+            has_valid = bool(mask_group is not None and "valid" in mask_group and len(mask_group["valid"]) > 0)
 
-        return {
+        splits = {
             "train": self._generate_examples(
                 path=dataset_path,
                 language_instruction=language_instruction,
                 train=True,
             ),
-            "val": self._generate_examples(
+        }
+        if has_valid:
+            splits["val"] = self._generate_examples(
                 path=dataset_path,
                 language_instruction=language_instruction,
                 train=False,
-            ),
-        }
+            )
+        return splits
 
     def _generate_examples(self, path: str, language_instruction: str, train: bool = True) -> Iterator[Tuple[str, Any]]:
         """Generator of examples for each split."""
