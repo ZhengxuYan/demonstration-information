@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Iterator, Tuple
 
@@ -17,6 +18,42 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
     RELEASE_NOTES = {"1.0.0": "Initial release."}
 
     MANUAL_DOWNLOAD_INSTRUCTIONS = "You can download the raw robomimic datasets from https://robomimic.github.io/docs/datasets/robomimic_v0.1.html."
+
+    @staticmethod
+    def _infer_language_instruction(dataset_path: str) -> str:
+        lowered_path = dataset_path.lower()
+        if "square" in lowered_path:
+            return "Put the square peg on the round hole."
+        if "can" in lowered_path:
+            return "Pick up the can and move it to the bin."
+        if "lift" in lowered_path:
+            return "Lift the block."
+        if "tool_hang" in lowered_path:
+            return "Hang the tool."
+
+        with h5py.File(dataset_path, "r") as f:
+            env_args_raw = f["data"].attrs.get("env_args")
+            env_name = ""
+            if env_args_raw is not None:
+                if isinstance(env_args_raw, bytes):
+                    env_args_raw = env_args_raw.decode("utf-8")
+                if isinstance(env_args_raw, str):
+                    try:
+                        env_name = json.loads(env_args_raw).get("env_name", "")
+                    except json.JSONDecodeError:
+                        env_name = env_args_raw
+            env_name = env_name.lower()
+
+        if "nutassemblysquare" in env_name or "square" in env_name:
+            return "Put the square peg on the round hole."
+        if "can" in env_name:
+            return "Pick up the can and move it to the bin."
+        if "lift" in env_name:
+            return "Lift the block."
+        if "tool_hang" in env_name:
+            return "Hang the tool."
+
+        raise ValueError(f"Unknown Task. Could not infer language instruction for {dataset_path}")
 
     def _info(self) -> tfds.core.DatasetInfo:
         """Dataset metadata (homepage, citation,...)."""
@@ -109,16 +146,7 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
         Modify this at each call.
         """
         dataset_path = os.path.join(dl_manager.manual_dir, "image.hdf5")
-        if "square" in dataset_path:
-            language_instruction = "Put the square peg on the round hole."
-        elif "can" in dataset_path:
-            language_instruction = "Pick up the can and move it to the bin."
-        elif "lift" in dataset_path:
-            language_instruction = "Lift the block."
-        elif "tool_hang" in dataset_path:
-            language_instruction = "Hang the tool."
-        else:
-            raise ValueError("Unknown Task.")
+        language_instruction = self._infer_language_instruction(dataset_path)
 
         return {
             "train": self._generate_examples(
