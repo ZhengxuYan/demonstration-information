@@ -33,6 +33,7 @@ import jax
 import numpy as np
 import quality_estimators
 import tensorflow as tf
+import tensorflow_datasets as tfds
 from absl import app, flags
 from jax.experimental import compilation_cache, multihost_utils
 from matplotlib import pyplot as plt
@@ -112,6 +113,16 @@ def _build_dataset_configs(base_config: ConfigDict, extra_specs: list[ExtraDatas
     return combined
 
 
+def _count_effective_steps(builder_dir: str, split: str = "train") -> int:
+    builder = tfds.builder_from_directory(builder_dir=builder_dir)
+    ds = builder.as_dataset(split=split, decoders=dict(steps=tfds.decode.SkipDecoding()), shuffle_files=False)
+    total = 0
+    for ep in tfds.as_numpy(ds):
+        ep_len = int(ep["steps"]["is_first"].shape[0])
+        total += max(ep_len - 1, 0)  # match dataloader behavior: terminal transition is removed
+    return total
+
+
 def main(_):
     compilation_cache.compilation_cache.set_cache_dir(os.path.expanduser("~/.jax_compilation_cache"))
 
@@ -129,6 +140,11 @@ def main(_):
     config = _load_config(FLAGS.obs_ckpt)
     extra_specs = [parse_extra_dataset(spec) for spec in FLAGS.extra_dataset or []]
     dataset_cfgs = _build_dataset_configs(config, extra_specs)
+
+    for name, ds_cfg in dataset_cfgs.items():
+        steps = _count_effective_steps(ds_cfg["path"], ds_cfg.get("train_split", "train"))
+        ds_cfg["weight"] = float(steps)
+        print(f"Using size-based weight for {name}: {steps} effective transitions")
 
     obs_alg, obs_state, _, _ = load_checkpoint(FLAGS.obs_ckpt)
     action_alg, action_state, _, _ = load_checkpoint(FLAGS.action_ckpt)
