@@ -262,7 +262,7 @@ def get_dataset_and_score_fn(
 
     # Subset the datasets if desired
     if datasets is not None:
-        dataloader_config["datasets"] = {k: dataloader_config["datasets"] for k in datasets}
+        dataloader_config["datasets"] = {k: dataloader_config["datasets"][k] for k in datasets}
     for ds in dataloader_config["datasets"]:
         if "val_split" in dataloader_config["datasets"][ds]:
             del dataloader_config["datasets"][ds]["val_split"]
