@@ -1,14 +1,14 @@
 """
-Visualize k-NN neighborhoods in the Square state-latent space for selected frames.
+Visualize k-NN neighborhoods in the Square observation-latent space for selected frames.
 
-This script loads a trained Square state observation VAE, encodes manually chosen
+This script loads a trained Square wrist observation VAE, encodes manually chosen
 query frames plus a reference pool from RoboMimic `image.hdf5`, computes
 k-nearest neighbors in latent space, and writes static figures plus CSV metadata.
 
 Example:
 
 python scripts/quality/visualize_square_state_latent_knn.py \
-  --obs_ckpt /iris/u/jasonyan/data/deminf_outputs/robomimic_state/square_mh_state_obs_vae_seed1 \
+  --obs_ckpt /iris/u/jasonyan/data/deminf_outputs/robomimic_image/square_mh_wrist_obs_vae_seed1 \
   --reference_hdf5 /iris/u/jasonyan/data/robomimic/square/image.hdf5 \
   --query_hdf5 /iris/u/jasonyan/data/fb_demos/forward_grab_image.hdf5 \
   --query 20=0,60,120 \
@@ -66,7 +66,7 @@ class QueryFrame:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--obs_ckpt", required=True, help="Path to the trained Square state observation VAE.")
+    parser.add_argument("--obs_ckpt", required=True, help="Path to the trained Square wrist observation VAE.")
     parser.add_argument(
         "--reference_hdf5",
         type=Path,
@@ -91,7 +91,7 @@ def parse_args() -> argparse.Namespace:
         "--camera",
         choices=sorted(CAMERA_KEY_BY_NAME),
         default="wrist",
-        help="Camera stream used for thumbnails in the output figures.",
+        help="Camera stream used for thumbnails in the output figures. Latent encoding always uses wrist images.",
     )
     parser.add_argument(
         "--max_reference_frames",
@@ -178,13 +178,14 @@ def concatenate_ordered(tree: dict) -> np.ndarray:
     return np.concatenate(flat, axis=-1)
 
 
-def load_hdf5_states(
+def load_hdf5_observations(
     hdf5_path: Path,
     obs_structure: dict,
     dataset_statistics: dict,
     max_frames: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    ref_states = []
+) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
+    ref_state = []
+    ref_wrist = []
     ref_demo_idx = []
     ref_frame_idx = []
 
@@ -193,48 +194,54 @@ def load_hdf5_states(
         for demo_name in demos:
             demo_idx = int(demo_name.split("_")[-1])
             obs_grp = f["data"][demo_name]["obs"]
-            if "object" not in obs_grp:
-                raise KeyError(
-                    f"{hdf5_path} is missing obs/object for {demo_name}. "
-                    "This script requires the Square state features used by the state VAE."
-                )
-
             raw_state = {
                 "EE_POS": obs_grp["robot0_eef_pos"][:].astype(np.float32),
                 "EE_QUAT": obs_grp["robot0_eef_quat"][:].astype(np.float32),
                 "GRIPPER": obs_grp["robot0_gripper_qpos"][:, :1].astype(np.float32),
-                "MISC": obs_grp["object"][:].astype(np.float32),
             }
             normalized_state = normalize_tree(raw_state, obs_structure["state"], stats_subtree(dataset_statistics, "state"))
             state_array = concatenate_ordered(normalized_state)
+            wrist_array = obs_grp["robot0_eye_in_hand_image"][:].astype(np.float32) / 255.0
 
             for frame_idx in range(state_array.shape[0]):
-                ref_states.append(state_array[frame_idx])
+                ref_state.append(state_array[frame_idx])
+                ref_wrist.append(wrist_array[frame_idx])
                 ref_demo_idx.append(demo_idx)
                 ref_frame_idx.append(frame_idx)
 
-    ref_states = np.asarray(ref_states, dtype=np.float32)
+    ref_observation = {
+        "state": np.asarray(ref_state, dtype=np.float32),
+        "image": {"wrist": np.asarray(ref_wrist, dtype=np.float32)},
+    }
     ref_demo_idx = np.asarray(ref_demo_idx, dtype=np.int32)
     ref_frame_idx = np.asarray(ref_frame_idx, dtype=np.int32)
 
-    if max_frames is not None and max_frames < ref_states.shape[0]:
+    if max_frames is not None and max_frames < ref_observation["state"].shape[0]:
         rng = np.random.default_rng(0)
-        keep = np.sort(rng.choice(ref_states.shape[0], size=max_frames, replace=False))
-        ref_states = ref_states[keep]
+        keep = np.sort(rng.choice(ref_observation["state"].shape[0], size=max_frames, replace=False))
+        ref_observation = {
+            "state": ref_observation["state"][keep],
+            "image": {"wrist": ref_observation["image"]["wrist"][keep]},
+        }
         ref_demo_idx = ref_demo_idx[keep]
         ref_frame_idx = ref_frame_idx[keep]
 
-    return ref_states, ref_demo_idx, ref_frame_idx
+    return ref_observation, ref_demo_idx, ref_frame_idx
 
 
-def encode_states(obs_alg, obs_state, states: np.ndarray, batch_size: int) -> np.ndarray:
+def encode_observations(obs_alg, obs_state, observation: dict[str, object], batch_size: int) -> np.ndarray:
     predict = jax.jit(lambda batch, rng: obs_alg.predict(obs_state, batch, rng))
     outputs = []
     base_rng = jax.random.key(0)
-    for batch_idx, start in enumerate(range(0, states.shape[0], batch_size)):
-        end = min(start + batch_size, states.shape[0])
-        batch_states = states[start:end, None, :]
-        batch = {"observation": {"state": jax.device_put(batch_states)}}
+    total = observation["state"].shape[0]
+    for batch_idx, start in enumerate(range(0, total, batch_size)):
+        end = min(start + batch_size, total)
+        batch = {
+            "observation": {
+                "state": jax.device_put(observation["state"][start:end, None, :]),
+                "image": {"wrist": jax.device_put(observation["image"]["wrist"][start:end, None, ...])},
+            }
+        }
         rng = jax.random.fold_in(base_rng, batch_idx)
         outputs.append(np.asarray(predict(batch, rng)))
     return np.concatenate(outputs, axis=0)
@@ -259,13 +266,14 @@ def load_frame_image(hdf5_path: Path, demo_idx: int, frame_idx: int, camera: str
     return np.asarray(frame, dtype=np.uint8)
 
 
-def load_query_states(
+def load_query_observations(
     hdf5_path: Path,
     obs_structure: dict,
     dataset_statistics: dict,
     queries: list[QueryFrame],
-) -> np.ndarray:
-    query_states = []
+) -> dict[str, object]:
+    query_state = []
+    query_wrist = []
     with h5py.File(hdf5_path, "r") as f:
         for query in queries:
             demo_key = f"demo_{query.demo}"
@@ -282,11 +290,14 @@ def load_query_states(
                 "EE_POS": obs_grp["robot0_eef_pos"][query.frame : query.frame + 1].astype(np.float32),
                 "EE_QUAT": obs_grp["robot0_eef_quat"][query.frame : query.frame + 1].astype(np.float32),
                 "GRIPPER": obs_grp["robot0_gripper_qpos"][query.frame : query.frame + 1, :1].astype(np.float32),
-                "MISC": obs_grp["object"][query.frame : query.frame + 1].astype(np.float32),
             }
             normalized_state = normalize_tree(raw_state, obs_structure["state"], stats_subtree(dataset_statistics, "state"))
-            query_states.append(concatenate_ordered(normalized_state)[0])
-    return np.asarray(query_states, dtype=np.float32)
+            query_state.append(concatenate_ordered(normalized_state)[0])
+            query_wrist.append(obs_grp["robot0_eye_in_hand_image"][query.frame].astype(np.float32) / 255.0)
+    return {
+        "state": np.asarray(query_state, dtype=np.float32),
+        "image": {"wrist": np.asarray(query_wrist, dtype=np.float32)},
+    }
 
 
 def find_neighbors(
@@ -390,7 +401,7 @@ def plot_query_figure(
             )
         ax.axis("off")
 
-    fig.suptitle(f"State-latent k-NN for demo {query.demo}, frame {query.frame}", fontsize=14, y=0.99)
+    fig.suptitle(f"Observation-latent k-NN for demo {query.demo}, frame {query.frame}", fontsize=14, y=0.99)
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
@@ -407,16 +418,16 @@ def main() -> None:
         dataset_statistics = next(iter(dataset_statistics.values()))
     obs_structure = obs_config.structure["observation"].to_dict()
 
-    ref_states, ref_demo_idx, ref_frame_idx = load_hdf5_states(
+    ref_observation, ref_demo_idx, ref_frame_idx = load_hdf5_observations(
         args.reference_hdf5,
         obs_structure=obs_structure,
         dataset_statistics=dataset_statistics,
         max_frames=args.max_reference_frames,
     )
-    ref_latents = encode_states(obs_alg, obs_state, ref_states, args.batch_size)
+    ref_latents = encode_observations(obs_alg, obs_state, ref_observation, args.batch_size)
 
-    query_states = load_query_states(query_hdf5, obs_structure, dataset_statistics, queries)
-    query_latents = encode_states(obs_alg, obs_state, query_states, args.batch_size)
+    query_observation = load_query_observations(query_hdf5, obs_structure, dataset_statistics, queries)
+    query_latents = encode_observations(obs_alg, obs_state, query_observation, args.batch_size)
 
     pca_mean, pca_components = fit_pca_2d(ref_latents)
     ref_projection = project_pca(ref_latents, pca_mean, pca_components)
@@ -485,7 +496,7 @@ def main() -> None:
         "k": args.k,
         "batch_size": args.batch_size,
         "max_reference_frames": args.max_reference_frames,
-        "num_reference_frames": int(ref_states.shape[0]),
+        "num_reference_frames": int(ref_observation["state"].shape[0]),
         "latent_dim": int(ref_latents.shape[-1]),
         "query_equals_reference": query_equals_reference,
         "queries": [{"demo": query.demo, "frame": query.frame} for query in queries],
