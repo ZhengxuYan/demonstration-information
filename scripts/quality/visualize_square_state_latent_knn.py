@@ -307,13 +307,12 @@ def find_neighbors(
     ref_demo_idx: np.ndarray,
     ref_frame_idx: np.ndarray,
     k: int,
-    exclude_self: bool,
+    exclude_same_demo: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     distances = np.linalg.norm(ref_latents - query_latent[None, :], axis=1)
     distances = distances.copy()
-    if exclude_self:
-        same_mask = (ref_demo_idx == query.demo) & (ref_frame_idx == query.frame)
-        distances[same_mask] = np.inf
+    if exclude_same_demo:
+        distances[ref_demo_idx == query.demo] = np.inf
     order = np.argsort(distances)
     valid = order[np.isfinite(distances[order])]
     if valid.shape[0] < k:
@@ -443,7 +442,7 @@ def main() -> None:
             ref_demo_idx,
             ref_frame_idx,
             args.k,
-            exclude_self=query_equals_reference,
+            exclude_same_demo=query_equals_reference,
         )
         out_path = args.output_dir / f"demo_{query.demo:04d}_frame_{query.frame:04d}_neighbors.png"
         plot_query_figure(
@@ -499,6 +498,7 @@ def main() -> None:
         "num_reference_frames": int(ref_observation["state"].shape[0]),
         "latent_dim": int(ref_latents.shape[-1]),
         "query_equals_reference": query_equals_reference,
+        "exclude_same_demo": query_equals_reference,
         "queries": [{"demo": query.demo, "frame": query.frame} for query in queries],
     }
     with (args.output_dir / "summary.json").open("w") as f:

@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>latent k-NN review</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe5;
+      --panel: #fffaf0;
+      --ink: #1f1b17;
+      --muted: #6d675f;
+      --border: #ddd3c2;
+      --accent: #0f5b5c;
+      --warm: #c96c33;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #f8f3ea 0%, var(--bg) 100%);
+      color: var(--ink);
+      font-family: "Iowan Old Style", "Palatino Linotype", serif;
+    }
+    header {
+      padding: 22px 24px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 250, 240, 0.94);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      backdrop-filter: blur(10px);
+    }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    .lede { margin: 0; color: var(--muted); max-width: 920px; line-height: 1.5; }
+    .meta {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .chip {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 6px 10px;
+    }
+    main { padding: 24px; display: grid; gap: 26px; }
+    .query-section {
+      background: rgba(255, 250, 240, 0.75);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.05);
+      overflow: hidden;
+    }
+    .query-head { padding: 18px 20px 8px; }
+    .query-head h2 { margin: 0 0 4px; font-size: 24px; }
+    .query-head p { margin: 0; color: var(--muted); }
+    .query-layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) 1fr;
+      gap: 18px;
+      padding: 14px 18px 20px;
+      align-items: start;
+    }
+    .query-column { display: grid; gap: 14px; }
+    .query-frame-card, .pca-plot {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .query-frame { display: block; width: 100%; image-rendering: auto; }
+    .query-frame-meta {
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 4px;
+      font-size: 14px;
+    }
+    .pca-plot { display: block; }
+    .neighbor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .neighbor-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+    }
+    .neighbor-card img { display: block; width: 100%; }
+    .neighbor-meta {
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 3px;
+      font-size: 13px;
+    }
+    .neighbor-meta strong { color: var(--warm); }
+    @media (max-width: 980px) {
+      .query-layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Latent k-NN Review</h1>
+    <p class="lede">Query frames and their nearest neighbors in the learned observation latent space. Each section shows the exact query frame, its neighbor frames, and the original PCA summary figure from the k-NN run.</p>
+    <div class="meta">
+      <span class="chip">camera: wrist</span>
+      <span class="chip">k: 8</span>
+      <span class="chip">reference frames: 1690</span>
+      <span class="chip">latent dim: 16</span>
+    </div>
+  </header>
+  <main>
+    
+            <section class="query-section">
+              <div class="query-head">
+                <div class="query-summary">
+                  <h2>demo 1, frame 0</h2>
+                  <p>Query frame with its latent nearest neighbors, ordered by increasing Euclidean distance.</p>
+                </div>
+              </div>
+              <div class="query-layout">
+                <div class="query-column">
+                  <div class="query-frame-card">
+                    <img class="query-frame" src="assets/query/demo_0001_frame_0000.png" alt="query frame">
+                    <div class="query-frame-meta">
+                      <strong>Query</strong>
+                      <span>demo 1</span>
+                      <span>frame 0</span>
+                    </div>
+                  </div>
+                  <img class="pca-plot" src="demo_0001_frame_0000_neighbors.png" alt="PCA view for demo 1 frame 0">
+                </div>
+                <div class="neighbor-grid">
+                  
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0001.png" alt="neighbor 1">
+                  <div class="neighbor-meta">
+                    <strong>#1</strong>
+                    <span>demo 1</span>
+                    <span>frame 1</span>
+                    <span>dist 0.2284</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0005_frame_0002.png" alt="neighbor 2">
+                  <div class="neighbor-meta">
+                    <strong>#2</strong>
+                    <span>demo 5</span>
+                    <span>frame 2</span>
+                    <span>dist 0.7473</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0002.png" alt="neighbor 3">
+                  <div class="neighbor-meta">
+                    <strong>#3</strong>
+                    <span>demo 1</span>
+                    <span>frame 2</span>
+                    <span>dist 0.8225</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0005_frame_0003.png" alt="neighbor 4">
+                  <div class="neighbor-meta">
+                    <strong>#4</strong>
+                    <span>demo 5</span>
+                    <span>frame 3</span>
+                    <span>dist 0.8964</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0006_frame_0001.png" alt="neighbor 5">
+                  <div class="neighbor-meta">
+                    <strong>#5</strong>
+                    <span>demo 6</span>
+                    <span>frame 1</span>
+                    <span>dist 1.0141</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0003.png" alt="neighbor 6">
+                  <div class="neighbor-meta">
+                    <strong>#6</strong>
+                    <span>demo 1</span>
+                    <span>frame 3</span>
+                    <span>dist 1.0906</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0006_frame_0000.png" alt="neighbor 7">
+                  <div class="neighbor-meta">
+                    <strong>#7</strong>
+                    <span>demo 6</span>
+                    <span>frame 0</span>
+                    <span>dist 1.0945</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0005_frame_0004.png" alt="neighbor 8">
+                  <div class="neighbor-meta">
+                    <strong>#8</strong>
+                    <span>demo 5</span>
+                    <span>frame 4</span>
+                    <span>dist 1.0977</span>
+                  </div>
+                </article>
+                
+                </div>
+              </div>
+            </section>
+            
+            <section class="query-section">
+              <div class="query-head">
+                <div class="query-summary">
+                  <h2>demo 1, frame 40</h2>
+                  <p>Query frame with its latent nearest neighbors, ordered by increasing Euclidean distance.</p>
+                </div>
+              </div>
+              <div class="query-layout">
+                <div class="query-column">
+                  <div class="query-frame-card">
+                    <img class="query-frame" src="assets/query/demo_0001_frame_0040.png" alt="query frame">
+                    <div class="query-frame-meta">
+                      <strong>Query</strong>
+                      <span>demo 1</span>
+                      <span>frame 40</span>
+                    </div>
+                  </div>
+                  <img class="pca-plot" src="demo_0001_frame_0040_neighbors.png" alt="PCA view for demo 1 frame 40">
+                </div>
+                <div class="neighbor-grid">
+                  
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0039.png" alt="neighbor 1">
+                  <div class="neighbor-meta">
+                    <strong>#1</strong>
+                    <span>demo 1</span>
+                    <span>frame 39</span>
+                    <span>dist 0.0595</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0041.png" alt="neighbor 2">
+                  <div class="neighbor-meta">
+                    <strong>#2</strong>
+                    <span>demo 1</span>
+                    <span>frame 41</span>
+                    <span>dist 0.0996</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0038.png" alt="neighbor 3">
+                  <div class="neighbor-meta">
+                    <strong>#3</strong>
+                    <span>demo 1</span>
+                    <span>frame 38</span>
+                    <span>dist 0.1198</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0042.png" alt="neighbor 4">
+                  <div class="neighbor-meta">
+                    <strong>#4</strong>
+                    <span>demo 1</span>
+                    <span>frame 42</span>
+                    <span>dist 0.1876</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0037.png" alt="neighbor 5">
+                  <div class="neighbor-meta">
+                    <strong>#5</strong>
+                    <span>demo 1</span>
+                    <span>frame 37</span>
+                    <span>dist 0.2073</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0043.png" alt="neighbor 6">
+                  <div class="neighbor-meta">
+                    <strong>#6</strong>
+                    <span>demo 1</span>
+                    <span>frame 43</span>
+                    <span>dist 0.2565</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0036.png" alt="neighbor 7">
+                  <div class="neighbor-meta">
+                    <strong>#7</strong>
+                    <span>demo 1</span>
+                    <span>frame 36</span>
+                    <span>dist 0.2910</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0044.png" alt="neighbor 8">
+                  <div class="neighbor-meta">
+                    <strong>#8</strong>
+                    <span>demo 1</span>
+                    <span>frame 44</span>
+                    <span>dist 0.3348</span>
+                  </div>
+                </article>
+                
+                </div>
+              </div>
+            </section>
+            
+            <section class="query-section">
+              <div class="query-head">
+                <div class="query-summary">
+                  <h2>demo 1, frame 80</h2>
+                  <p>Query frame with its latent nearest neighbors, ordered by increasing Euclidean distance.</p>
+                </div>
+              </div>
+              <div class="query-layout">
+                <div class="query-column">
+                  <div class="query-frame-card">
+                    <img class="query-frame" src="assets/query/demo_0001_frame_0080.png" alt="query frame">
+                    <div class="query-frame-meta">
+                      <strong>Query</strong>
+                      <span>demo 1</span>
+                      <span>frame 80</span>
+                    </div>
+                  </div>
+                  <img class="pca-plot" src="demo_0001_frame_0080_neighbors.png" alt="PCA view for demo 1 frame 80">
+                </div>
+                <div class="neighbor-grid">
+                  
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0081.png" alt="neighbor 1">
+                  <div class="neighbor-meta">
+                    <strong>#1</strong>
+                    <span>demo 1</span>
+                    <span>frame 81</span>
+                    <span>dist 0.1354</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0079.png" alt="neighbor 2">
+                  <div class="neighbor-meta">
+                    <strong>#2</strong>
+                    <span>demo 1</span>
+                    <span>frame 79</span>
+                    <span>dist 0.1377</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0078.png" alt="neighbor 3">
+                  <div class="neighbor-meta">
+                    <strong>#3</strong>
+                    <span>demo 1</span>
+                    <span>frame 78</span>
+                    <span>dist 0.2396</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0082.png" alt="neighbor 4">
+                  <div class="neighbor-meta">
+                    <strong>#4</strong>
+                    <span>demo 1</span>
+                    <span>frame 82</span>
+                    <span>dist 0.2403</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0083.png" alt="neighbor 5">
+                  <div class="neighbor-meta">
+                    <strong>#5</strong>
+                    <span>demo 1</span>
+                    <span>frame 83</span>
+                    <span>dist 0.3319</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0077.png" alt="neighbor 6">
+                  <div class="neighbor-meta">
+                    <strong>#6</strong>
+                    <span>demo 1</span>
+                    <span>frame 77</span>
+                    <span>dist 0.3341</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0084.png" alt="neighbor 7">
+                  <div class="neighbor-meta">
+                    <strong>#7</strong>
+                    <span>demo 1</span>
+                    <span>frame 84</span>
+                    <span>dist 0.4368</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0001_frame_0076.png" alt="neighbor 8">
+                  <div class="neighbor-meta">
+                    <strong>#8</strong>
+                    <span>demo 1</span>
+                    <span>frame 76</span>
+                    <span>dist 0.4398</span>
+                  </div>
+                </article>
+                
+                </div>
+              </div>
+            </section>
+            
+            <section class="query-section">
+              <div class="query-head">
+                <div class="query-summary">
+                  <h2>demo 3, frame 20</h2>
+                  <p>Query frame with its latent nearest neighbors, ordered by increasing Euclidean distance.</p>
+                </div>
+              </div>
+              <div class="query-layout">
+                <div class="query-column">
+                  <div class="query-frame-card">
+                    <img class="query-frame" src="assets/query/demo_0003_frame_0020.png" alt="query frame">
+                    <div class="query-frame-meta">
+                      <strong>Query</strong>
+                      <span>demo 3</span>
+                      <span>frame 20</span>
+                    </div>
+                  </div>
+                  <img class="pca-plot" src="demo_0003_frame_0020_neighbors.png" alt="PCA view for demo 3 frame 20">
+                </div>
+                <div class="neighbor-grid">
+                  
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0021.png" alt="neighbor 1">
+                  <div class="neighbor-meta">
+                    <strong>#1</strong>
+                    <span>demo 3</span>
+                    <span>frame 21</span>
+                    <span>dist 0.1214</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0019.png" alt="neighbor 2">
+                  <div class="neighbor-meta">
+                    <strong>#2</strong>
+                    <span>demo 3</span>
+                    <span>frame 19</span>
+                    <span>dist 0.1278</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0018.png" alt="neighbor 3">
+                  <div class="neighbor-meta">
+                    <strong>#3</strong>
+                    <span>demo 3</span>
+                    <span>frame 18</span>
+                    <span>dist 0.1991</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0022.png" alt="neighbor 4">
+                  <div class="neighbor-meta">
+                    <strong>#4</strong>
+                    <span>demo 3</span>
+                    <span>frame 22</span>
+                    <span>dist 0.2578</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0017.png" alt="neighbor 5">
+                  <div class="neighbor-meta">
+                    <strong>#5</strong>
+                    <span>demo 3</span>
+                    <span>frame 17</span>
+                    <span>dist 0.2818</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0016.png" alt="neighbor 6">
+                  <div class="neighbor-meta">
+                    <strong>#6</strong>
+                    <span>demo 3</span>
+                    <span>frame 16</span>
+                    <span>dist 0.3337</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0023.png" alt="neighbor 7">
+                  <div class="neighbor-meta">
+                    <strong>#7</strong>
+                    <span>demo 3</span>
+                    <span>frame 23</span>
+                    <span>dist 0.4094</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0015.png" alt="neighbor 8">
+                  <div class="neighbor-meta">
+                    <strong>#8</strong>
+                    <span>demo 3</span>
+                    <span>frame 15</span>
+                    <span>dist 0.4272</span>
+                  </div>
+                </article>
+                
+                </div>
+              </div>
+            </section>
+            
+            <section class="query-section">
+              <div class="query-head">
+                <div class="query-summary">
+                  <h2>demo 3, frame 60</h2>
+                  <p>Query frame with its latent nearest neighbors, ordered by increasing Euclidean distance.</p>
+                </div>
+              </div>
+              <div class="query-layout">
+                <div class="query-column">
+                  <div class="query-frame-card">
+                    <img class="query-frame" src="assets/query/demo_0003_frame_0060.png" alt="query frame">
+                    <div class="query-frame-meta">
+                      <strong>Query</strong>
+                      <span>demo 3</span>
+                      <span>frame 60</span>
+                    </div>
+                  </div>
+                  <img class="pca-plot" src="demo_0003_frame_0060_neighbors.png" alt="PCA view for demo 3 frame 60">
+                </div>
+                <div class="neighbor-grid">
+                  
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0059.png" alt="neighbor 1">
+                  <div class="neighbor-meta">
+                    <strong>#1</strong>
+                    <span>demo 3</span>
+                    <span>frame 59</span>
+                    <span>dist 0.0591</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0061.png" alt="neighbor 2">
+                  <div class="neighbor-meta">
+                    <strong>#2</strong>
+                    <span>demo 3</span>
+                    <span>frame 61</span>
+                    <span>dist 0.0726</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0058.png" alt="neighbor 3">
+                  <div class="neighbor-meta">
+                    <strong>#3</strong>
+                    <span>demo 3</span>
+                    <span>frame 58</span>
+                    <span>dist 0.0941</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0062.png" alt="neighbor 4">
+                  <div class="neighbor-meta">
+                    <strong>#4</strong>
+                    <span>demo 3</span>
+                    <span>frame 62</span>
+                    <span>dist 0.1320</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0057.png" alt="neighbor 5">
+                  <div class="neighbor-meta">
+                    <strong>#5</strong>
+                    <span>demo 3</span>
+                    <span>frame 57</span>
+                    <span>dist 0.1382</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0063.png" alt="neighbor 6">
+                  <div class="neighbor-meta">
+                    <strong>#6</strong>
+                    <span>demo 3</span>
+                    <span>frame 63</span>
+                    <span>dist 0.1681</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0056.png" alt="neighbor 7">
+                  <div class="neighbor-meta">
+                    <strong>#7</strong>
+                    <span>demo 3</span>
+                    <span>frame 56</span>
+                    <span>dist 0.2102</span>
+                  </div>
+                </article>
+                
+                <article class="neighbor-card">
+                  <img src="assets/ref/demo_0003_frame_0064.png" alt="neighbor 8">
+                  <div class="neighbor-meta">
+                    <strong>#8</strong>
+                    <span>demo 3</span>
+                    <span>frame 64</span>
+                    <span>dist 0.2178</span>
+                  </div>
+                </article>
+                
+                </div>
+              </div>
+            </section>
+            
+  </main>
+</body>
+</html>
