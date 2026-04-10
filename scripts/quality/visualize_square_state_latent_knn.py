@@ -86,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         help="Manual query specification: demo=frame[,frame...]. Repeat for multiple demos.",
     )
     parser.add_argument("--k", type=int, default=8, help="Number of neighbors to return per query.")
+    parser.add_argument(
+        "--max_one_per_demo",
+        action="store_true",
+        help="If set, keep at most one neighbor from each demo in the returned top-k list.",
+    )
     parser.add_argument("--output_dir", type=Path, required=True, help="Directory for figures and CSV output.")
     parser.add_argument(
         "--camera",
@@ -308,6 +313,7 @@ def find_neighbors(
     ref_frame_idx: np.ndarray,
     k: int,
     exclude_same_demo: bool,
+    max_one_per_demo: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     distances = np.linalg.norm(ref_latents - query_latent[None, :], axis=1)
     distances = distances.copy()
@@ -315,9 +321,26 @@ def find_neighbors(
         distances[ref_demo_idx == query.demo] = np.inf
     order = np.argsort(distances)
     valid = order[np.isfinite(distances[order])]
-    if valid.shape[0] < k:
-        raise ValueError(f"Requested k={k}, but only {valid.shape[0]} valid neighbors are available.")
-    keep = valid[:k]
+    if max_one_per_demo:
+        keep_list = []
+        seen_demos: set[int] = set()
+        for idx in valid.tolist():
+            demo_idx = int(ref_demo_idx[idx])
+            if demo_idx in seen_demos:
+                continue
+            keep_list.append(idx)
+            seen_demos.add(demo_idx)
+            if len(keep_list) == k:
+                break
+        if len(keep_list) < k:
+            raise ValueError(
+                f"Requested k={k} with --max_one_per_demo, but only {len(keep_list)} unique-demo neighbors are available."
+            )
+        keep = np.asarray(keep_list, dtype=np.int32)
+    else:
+        if valid.shape[0] < k:
+            raise ValueError(f"Requested k={k}, but only {valid.shape[0]} valid neighbors are available.")
+        keep = valid[:k]
     return keep, distances[keep]
 
 
@@ -443,6 +466,7 @@ def main() -> None:
             ref_frame_idx,
             args.k,
             exclude_same_demo=query_equals_reference,
+            max_one_per_demo=args.max_one_per_demo,
         )
         out_path = args.output_dir / f"demo_{query.demo:04d}_frame_{query.frame:04d}_neighbors.png"
         plot_query_figure(
@@ -499,6 +523,7 @@ def main() -> None:
         "latent_dim": int(ref_latents.shape[-1]),
         "query_equals_reference": query_equals_reference,
         "exclude_same_demo": query_equals_reference,
+        "max_one_per_demo": args.max_one_per_demo,
         "queries": [{"demo": query.demo, "frame": query.frame} for query in queries],
     }
     with (args.output_dir / "summary.json").open("w") as f:

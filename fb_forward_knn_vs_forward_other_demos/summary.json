@@ -1,0 +1,35 @@
+{
+  "obs_ckpt": "/iris/u/jasonyan/data/deminf_outputs/robomimic_image/square_mh_wrist_obs_vae_seed1",
+  "reference_hdf5": "/iris/u/jasonyan/data/fb_demos/forward_grab_image.hdf5",
+  "query_hdf5": "/iris/u/jasonyan/data/fb_demos/forward_grab_image.hdf5",
+  "camera": "wrist",
+  "k": 8,
+  "batch_size": 2048,
+  "max_reference_frames": null,
+  "num_reference_frames": 1690,
+  "latent_dim": 16,
+  "query_equals_reference": true,
+  "exclude_same_demo": true,
+  "queries": [
+    {
+      "demo": 1,
+      "frame": 0
+    },
+    {
+      "demo": 1,
+      "frame": 40
+    },
+    {
+      "demo": 1,
+      "frame": 80
+    },
+    {
+      "demo": 3,
+      "frame": 20
+    },
+    {
+      "demo": 3,
+      "frame": 60
+    }
+  ]
+}
