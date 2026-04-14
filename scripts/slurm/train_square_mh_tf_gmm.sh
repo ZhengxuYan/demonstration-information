@@ -24,6 +24,8 @@ mkdir -p /iris/u/jasonyan/slurm
 
 cd "${REPO}/robomimic"
 
+python "${REPO}/scripts/setup/patch_robomimic_optional_diffusion.py"
+
 export MUJOCO_GL=egl
 export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=2
