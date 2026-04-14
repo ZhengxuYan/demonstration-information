@@ -107,10 +107,6 @@ def build_query_cards(
     for (query_demo, query_frame), group in sorted(grouped.items()):
         group.sort(key=lambda row: row["neighbor_rank"])
         query_asset = assets[(query_demo, query_frame)]["src"]
-        pca_plot = f"demo_{query_demo:04d}_frame_{query_frame:04d}_neighbors.png"
-        pca_plot_html = ""
-        if (results_dir / pca_plot).exists():
-            pca_plot_html = f'<img class="pca-plot" src="{html.escape(pca_plot)}" alt="PCA view for demo {query_demo} frame {query_frame}">'
 
         neighbor_html = []
         for row in group:
@@ -148,7 +144,6 @@ def build_query_cards(
                       <span>frame {query_frame}</span>
                     </div>
                   </div>
-                  {pca_plot_html}
                 </div>
                 <div class="neighbor-grid">
                   {''.join(neighbor_html)}
@@ -161,6 +156,15 @@ def build_query_cards(
 
 
 def build_page(results_dir: Path, summary: dict, cards_html: str, output: Path) -> None:
+    policy_bits = []
+    if summary.get("query_equals_reference"):
+        policy_bits.append("query and reference come from the same demo set")
+    if summary.get("exclude_same_demo"):
+        policy_bits.append("neighbors from the query demo are excluded")
+    if summary.get("max_one_per_demo"):
+        policy_bits.append("at most one neighbor per demo")
+    policy_text = "; ".join(policy_bits) if policy_bits else "standard nearest-neighbor retrieval"
+    query_count = len(summary.get("queries", []))
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -272,10 +276,11 @@ def build_page(results_dir: Path, summary: dict, cards_html: str, output: Path) 
 <body>
   <header>
     <h1>Latent k-NN Review</h1>
-    <p class="lede">Query frames and their nearest neighbors in the learned observation latent space. Each section shows the exact query frame, its neighbor frames, and the original PCA summary figure from the k-NN run.</p>
+    <p class="lede">Query frames and their nearest neighbors in the learned wrist-observation latent space. Each section shows the exact query frame, the retrieved neighbor frames, and the original PCA summary figure from the k-NN run. Retrieval policy: {html.escape(policy_text)}.</p>
     <div class="meta">
       <span class="chip">camera: {html.escape(str(summary.get("camera", "wrist")))}</span>
       <span class="chip">k: {int(summary.get("k", 0))}</span>
+      <span class="chip">queries: {query_count}</span>
       <span class="chip">reference frames: {int(summary.get("num_reference_frames", 0))}</span>
       <span class="chip">latent dim: {int(summary.get("latent_dim", 0))}</span>
     </div>
