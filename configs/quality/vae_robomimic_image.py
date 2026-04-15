@@ -4,9 +4,16 @@ Config for training beta vae's on robomimic
 Example command:
 
 python scripts/train.py \
-    --config=configs/quality/vae_robomimic_image.py:square/mh,s \
+    --config=configs/quality/vae_robomimic_image.py:square/mh,s,1,wrist \
     --path test \
     --name state
+
+Multiple RLDS roots can be mixed by separating dataset specs with "::":
+
+python scripts/train.py \
+    --config=configs/quality/vae_robomimic_image.py:combined,s,1,wrist,square_mh=/path/to/mh@72707::random=/path/to/random@8055 \
+    --path test \
+    --name combined_wrist
 """
 
 import optax
@@ -22,27 +29,99 @@ from openx.networks.core import Concatenate, MultiDecoder, MultiEncoder
 from openx.utils.spec import ModuleSpec
 
 
+DEFAULT_ROBOMIMIC_RLDS = "/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0"
+
+
+def _parse_dataset_specs(ds: str, dataset_path: str):
+    """Parse one or more RLDS dataset roots.
+
+    Format:
+      /path/to/dataset
+      name=/path/to/dataset
+      name=/path/to/dataset@weight
+      spec::spec::...
+
+    Multi-dataset configs intentionally omit validation splits because custom
+    RLDS builds often only contain train.
+    """
+
+    specs = []
+    for index, raw_spec in enumerate(dataset_path.split("::")):
+        spec = raw_spec.strip()
+        if not spec:
+            continue
+
+        if "=" in spec:
+            name, path_and_weight = spec.split("=", 1)
+        else:
+            name = ds.replace("/", "_") if len(dataset_path.split("::")) == 1 else f"{ds.replace('/', '_')}_{index}"
+            path_and_weight = spec
+
+        weight = None
+        path = path_and_weight
+        if "@" in path_and_weight:
+            path, weight_text = path_and_weight.rsplit("@", 1)
+            weight = float(weight_text)
+
+        cfg = dict(
+            path=path,
+            train_split="train",
+            transform=ModuleSpec.create(robomimic_dataset_transform),
+        )
+        if weight is not None:
+            cfg["weight"] = weight
+        specs.append((name.replace("/", "_"), cfg))
+
+    if not specs:
+        raise ValueError(f"No dataset specs parsed from {dataset_path}")
+    return specs
+
+
 def get_config(config_str="square/mh,sa,1"):
-    ds, config_type, seed = config_str.split(",")
-    seed = int(seed)
+    parts = config_str.split(",")
+    dataset_path = DEFAULT_ROBOMIMIC_RLDS
+    if len(parts) == 2:
+        ds, config_type = parts
+        seed = 1
+        camera = "wrist"
+    elif len(parts) == 3:
+        ds, config_type, seed = parts
+        seed = int(seed)
+        camera = "wrist"
+    elif len(parts) == 4:
+        ds, config_type, seed, camera = parts
+        seed = int(seed)
+    elif len(parts) == 5:
+        ds, config_type, seed, camera, dataset_path = parts
+        seed = int(seed)
+    else:
+        raise ValueError(
+            "Expected config string env,type[,seed[,camera[,dataset_path]]], "
+            f"for example square/mh,s,1,wrist. Got: {config_str}"
+        )
     assert config_type in {"s", "a", "sa"}
+    assert camera in {"wrist", "agent"}
+
+    image_key = f"observation->image->{camera}"
+    dataset_specs = _parse_dataset_specs(ds, dataset_path)
+    has_multiple_datasets = len(dataset_specs) > 1
 
     encoder_keys = {
-        "s": {"observation->state": None, "observation->image->wrist": ModuleSpec.create(ResNet18, num_kp=64)},
+        "s": {"observation->state": None, image_key: ModuleSpec.create(ResNet18, num_kp=64)},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            "observation->image->wrist": ModuleSpec.create(ResNet18, num_kp=64),
+            image_key: ModuleSpec.create(ResNet18, num_kp=64),
             "action": None,
         },
     }[config_type]
 
     decoder_keys = {
-        "s": {"observation->state": None, "observation->image->wrist": ModuleSpec.create(ResNet18Decoder)},
+        "s": {"observation->state": None, image_key: ModuleSpec.create(ResNet18Decoder)},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            "observation->image->wrist": ModuleSpec.create(ResNet18Decoder),
+            image_key: ModuleSpec.create(ResNet18Decoder),
             "action": None,
         },
     }[config_type]
@@ -55,9 +134,9 @@ def get_config(config_str="square/mh,sa,1"):
     }[config_type]
 
     weights = {
-        "s": {"observation->state": 1.0, "observation->image->wrist": 1 / 200},
+        "s": {"observation->state": 1.0, image_key: 1 / 200},
         "a": {"action": 1.0},
-        "sa": {"observation->state": 1.0, "observation->image->wrist": 1 / 200, "action": 1.0},
+        "sa": {"observation->state": 1.0, image_key: 1 / 200, "action": 1.0},
     }[config_type]
 
     # Define the structure
@@ -69,7 +148,7 @@ def get_config(config_str="square/mh,sa,1"):
                 StateEncoding.GRIPPER: NormalizationType.GAUSSIAN,
             },
             "image": {
-                "wrist": (84, 84),
+                camera: (84, 84),
             },
         },
         "action": {
@@ -81,15 +160,14 @@ def get_config(config_str="square/mh,sa,1"):
         },
     }
 
+    datasets = {}
+    for name, ds_cfg in dataset_specs:
+        if not has_multiple_datasets:
+            ds_cfg["val_split"] = "val"
+        datasets[name] = ds_cfg
+
     dataloader = dict(
-        datasets={
-            ds.replace("/", "_"): dict(
-                path="/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0",
-                train_split="train",
-                val_split="val",
-                transform=ModuleSpec.create(robomimic_dataset_transform),
-            ),
-        },
+        datasets=datasets,
         n_obs=1,
         n_action=1,
         augment_kwargs=dict(scale_range=(0.85, 0.95), aspect_ratio_range=None),

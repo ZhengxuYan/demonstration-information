@@ -36,6 +36,12 @@ from openx.data.utils import NormalizationType
 from openx.utils.evaluate import load_checkpoint
 
 
+CAMERA_DATASETS = {
+    "wrist": "robot0_eye_in_hand_image",
+    "agent": "agentview_image",
+}
+
+
 def _l2_dists(z):
     return jnp.linalg.norm(z[:, None, :] - z[None, :, :], axis=-1)
 
@@ -76,6 +82,15 @@ def parse_args():
     )
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--output", required=True, help="Output directory for pickle and plots.")
+    parser.add_argument(
+        "--camera",
+        default=None,
+        choices=sorted(CAMERA_DATASETS),
+        help=(
+            "Camera stream to load from HDF5. Defaults to the single image key in the observation "
+            "checkpoint config, if present."
+        ),
+    )
     parser.add_argument(
         "--shared-normalization",
         action="store_true",
@@ -164,7 +179,14 @@ def gather_time(x: np.ndarray, idx: np.ndarray) -> np.ndarray:
     return x[idx]
 
 
-def chunk_episode(observation: Dict, action: np.ndarray, ep_idx: int, quality_score: float, dataset_id: int) -> Dict:
+def chunk_episode(
+    observation: Dict,
+    action: np.ndarray,
+    ep_idx: int,
+    quality_score: float,
+    dataset_id: int,
+    image_key: str,
+) -> Dict:
     ep_len = action.shape[0]
     idx = np.arange(ep_len)
     obs_idx = np.maximum(idx[:, None], 0)
@@ -175,7 +197,7 @@ def chunk_episode(observation: Dict, action: np.ndarray, ep_idx: int, quality_sc
     obs = {
         "state": gather_time(observation["state"], obs_idx),
         "image": {
-            "wrist": gather_time(observation["image"]["wrist"], obs_idx),
+            image_key: gather_time(observation["image"][image_key], obs_idx),
         },
     }
     act = gather_time(action, action_idx)
@@ -184,7 +206,7 @@ def chunk_episode(observation: Dict, action: np.ndarray, ep_idx: int, quality_sc
     # Match dataloader behavior: cut the last terminal transition.
     obs = {
         "state": obs["state"][:-1],
-        "image": {"wrist": obs["image"]["wrist"][:-1]},
+        "image": {image_key: obs["image"][image_key][:-1]},
     }
     act = act[:-1]
     mask = mask[:-1]
@@ -202,13 +224,31 @@ def chunk_episode(observation: Dict, action: np.ndarray, ep_idx: int, quality_sc
     }
 
 
-def load_hdf5_dataset(spec: DatasetSpec, dataset_id: int, obs_structure: Dict, action_structure: Dict, stats: Dict):
+def load_hdf5_dataset(
+    spec: DatasetSpec,
+    dataset_id: int,
+    obs_structure: Dict,
+    action_structure: Dict,
+    stats: Dict,
+    image_key: str,
+    hdf5_image_dataset: str,
+):
     episodes = []
     with h5py.File(spec.path, "r") as f:
         demos = sorted(f["data"].keys(), key=lambda x: int(x.split("_")[-1]))
         for demo in demos:
             grp = f["data"][demo]
+            if "obs" not in grp:
+                raise KeyError(
+                    f"{spec.path}:{demo} has no 'obs' group. DemInf image scoring expects an image.hdf5 "
+                    "with RoboMimic observations, not a states-only demo.hdf5."
+                )
             obs_grp = grp["obs"]
+            if hdf5_image_dataset not in obs_grp:
+                raise KeyError(
+                    f"{spec.path}:{demo}/obs is missing '{hdf5_image_dataset}'. "
+                    f"Available observation keys: {sorted(obs_grp.keys())}"
+                )
             raw_obs = {
                 "state": {
                     "EE_POS": obs_grp["robot0_eef_pos"][:].astype(np.float32),
@@ -216,7 +256,7 @@ def load_hdf5_dataset(spec: DatasetSpec, dataset_id: int, obs_structure: Dict, a
                     "GRIPPER": obs_grp["robot0_gripper_qpos"][:, :1].astype(np.float32),
                 },
                 "image": {
-                    "wrist": obs_grp["robot0_eye_in_hand_image"][:].astype(np.float32) / 255.0,
+                    image_key: obs_grp[hdf5_image_dataset][:].astype(np.float32) / 255.0,
                 },
             }
             raw_action = {
@@ -244,12 +284,13 @@ def load_hdf5_dataset(spec: DatasetSpec, dataset_id: int, obs_structure: Dict, a
                 ep_idx=int(demo.split("_")[-1]),
                 quality_score=spec.label,
                 dataset_id=dataset_id,
+                image_key=image_key,
             )
             episodes.append(ep)
     return episodes
 
 
-def stack_batches(episodes: Iterable[Dict], batch_size: int):
+def stack_batches(episodes: Iterable[Dict], batch_size: int, image_key: str):
     merged = {}
     for ep in episodes:
         for key, value in ep.items():
@@ -260,7 +301,9 @@ def stack_batches(episodes: Iterable[Dict], batch_size: int):
     merged = {
         "observation": {
             "state": np.concatenate([x["state"] for x in merged["observation"]], axis=0),
-            "image": {"wrist": np.concatenate([x["image"]["wrist"] for x in merged["observation"]], axis=0)},
+            "image": {
+                image_key: np.concatenate([x["image"][image_key] for x in merged["observation"]], axis=0)
+            },
         },
         "action": np.concatenate(merged["action"], axis=0),
         "mask": np.concatenate(merged["mask"], axis=0),
@@ -276,7 +319,7 @@ def stack_batches(episodes: Iterable[Dict], batch_size: int):
         yield {
             "observation": {
                 "state": merged["observation"]["state"][start:end],
-                "image": {"wrist": merged["observation"]["image"]["wrist"][start:end]},
+                "image": {image_key: merged["observation"]["image"][image_key][start:end]},
             },
             "action": merged["action"][start:end],
             "mask": merged["mask"][start:end],
@@ -373,6 +416,21 @@ def main():
 
     obs_structure = obs_config.structure["observation"].to_dict()
     action_structure = obs_config.structure["action"].to_dict()
+    image_keys = list(obs_structure.get("image", {}).keys())
+    if args.camera is None:
+        if len(image_keys) != 1:
+            raise ValueError(
+                "Could not infer camera from checkpoint config. Pass --camera explicitly. "
+                f"Config image keys: {image_keys}"
+            )
+        image_key = image_keys[0]
+    else:
+        image_key = args.camera
+    if image_key not in obs_structure.get("image", {}):
+        raise ValueError(
+            f"Checkpoint observation config expects image keys {image_keys}, but --camera={image_key} was requested."
+        )
+    hdf5_image_dataset = CAMERA_DATASETS[image_key]
 
     pred_fn = jax.jit(
         lambda batch, rng: ksg_estimator(
@@ -405,13 +463,15 @@ def main():
             obs_structure=obs_structure,
             action_structure=action_structure,
             stats=dataset_statistics,
+            image_key=image_key,
+            hdf5_image_dataset=hdf5_image_dataset,
         )
 
         stats_list = []
         attrs = {k: [] for k in ("ep_idx", "step_idx", "quality_score", "dataset_id")}
         rng = jax.random.key(0)
 
-        for batch_index, batch in enumerate(stack_batches(episodes, args.batch_size)):
+        for batch_index, batch in enumerate(stack_batches(episodes, args.batch_size, image_key=image_key)):
             rng = jax.random.fold_in(rng, batch_index)
             batch = jax.tree.map(jnp.asarray, batch)
             pred = np.asarray(pred_fn(batch, rng))
