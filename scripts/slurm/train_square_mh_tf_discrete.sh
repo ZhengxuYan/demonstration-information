@@ -35,4 +35,4 @@ export MKL_NUM_THREADS=2
 python robomimic/scripts/train.py \
   --config "${CONFIG}" \
   --dataset "${DATASET}" \
-  --name square_mh_tf_discrete_agent_wrist_seed1
+  --name square_mh_tf_discrete_agent_wrist_no_object_seed1
