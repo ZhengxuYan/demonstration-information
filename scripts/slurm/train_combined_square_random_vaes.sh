@@ -4,6 +4,7 @@
 # Usage:
 #   sbatch scripts/slurm/train_combined_square_random_vaes.sh wrist
 #   sbatch scripts/slurm/train_combined_square_random_vaes.sh agent
+#   sbatch scripts/slurm/train_combined_square_random_vaes.sh both
 #   sbatch scripts/slurm/train_combined_square_random_vaes.sh action
 #   sbatch scripts/slurm/train_combined_square_random_vaes.sh all
 
@@ -21,8 +22,8 @@
 set -euo pipefail
 
 MODE="${1:-all}"
-if [[ "${MODE}" != "wrist" && "${MODE}" != "agent" && "${MODE}" != "action" && "${MODE}" != "all" ]]; then
-  echo "Expected mode to be one of: wrist, agent, action, all. Got: ${MODE}" >&2
+if [[ "${MODE}" != "wrist" && "${MODE}" != "agent" && "${MODE}" != "both" && "${MODE}" != "action" && "${MODE}" != "all" ]]; then
+  echo "Expected mode to be one of: wrist, agent, both, action, all. Got: ${MODE}" >&2
   exit 2
 fi
 
@@ -63,6 +64,10 @@ fi
 
 if [[ "${MODE}" == "agent" || "${MODE}" == "all" ]]; then
   run_train "s" "agent" "combined_square_random_agent_obs_vae_seed1"
+fi
+
+if [[ "${MODE}" == "both" || "${MODE}" == "all" ]]; then
+  run_train "s" "both" "combined_square_random_both_obs_vae_seed1"
 fi
 
 if [[ "${MODE}" == "action" || "${MODE}" == "all" ]]; then

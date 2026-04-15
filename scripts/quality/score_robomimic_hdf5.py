@@ -40,6 +40,10 @@ CAMERA_DATASETS = {
     "wrist": "robot0_eye_in_hand_image",
     "agent": "agentview_image",
 }
+IMAGE_KEY_TO_HDF5_DATASET = {
+    "wrist": "robot0_eye_in_hand_image",
+    "agent": "agentview_image",
+}
 
 
 def _l2_dists(z):
@@ -85,9 +89,10 @@ def parse_args():
     parser.add_argument(
         "--camera",
         default=None,
-        choices=sorted(CAMERA_DATASETS),
+        choices=sorted(CAMERA_DATASETS) + ["both"],
         help=(
-            "Camera stream to load from HDF5. Defaults to the single image key in the observation "
+            "Camera stream to load from HDF5. Use 'both' for fused agent+wrist checkpoints. "
+            "Defaults to the image keys in the observation "
             "checkpoint config, if present."
         ),
     )
@@ -185,7 +190,7 @@ def chunk_episode(
     ep_idx: int,
     quality_score: float,
     dataset_id: int,
-    image_key: str,
+    image_keys: list[str],
 ) -> Dict:
     ep_len = action.shape[0]
     idx = np.arange(ep_len)
@@ -196,9 +201,7 @@ def chunk_episode(
 
     obs = {
         "state": gather_time(observation["state"], obs_idx),
-        "image": {
-            image_key: gather_time(observation["image"][image_key], obs_idx),
-        },
+        "image": {image_key: gather_time(observation["image"][image_key], obs_idx) for image_key in image_keys},
     }
     act = gather_time(action, action_idx)
     act = np.where(mask[..., None], act, 0).astype(np.float32)
@@ -206,7 +209,7 @@ def chunk_episode(
     # Match dataloader behavior: cut the last terminal transition.
     obs = {
         "state": obs["state"][:-1],
-        "image": {image_key: obs["image"][image_key][:-1]},
+        "image": {image_key: obs["image"][image_key][:-1] for image_key in image_keys},
     }
     act = act[:-1]
     mask = mask[:-1]
@@ -230,8 +233,7 @@ def load_hdf5_dataset(
     obs_structure: Dict,
     action_structure: Dict,
     stats: Dict,
-    image_key: str,
-    hdf5_image_dataset: str,
+    image_keys: list[str],
 ):
     episodes = []
     with h5py.File(spec.path, "r") as f:
@@ -244,11 +246,13 @@ def load_hdf5_dataset(
                     "with RoboMimic observations, not a states-only demo.hdf5."
                 )
             obs_grp = grp["obs"]
-            if hdf5_image_dataset not in obs_grp:
-                raise KeyError(
-                    f"{spec.path}:{demo}/obs is missing '{hdf5_image_dataset}'. "
-                    f"Available observation keys: {sorted(obs_grp.keys())}"
-                )
+            for key in image_keys:
+                hdf5_image_dataset = IMAGE_KEY_TO_HDF5_DATASET[key]
+                if hdf5_image_dataset not in obs_grp:
+                    raise KeyError(
+                        f"{spec.path}:{demo}/obs is missing '{hdf5_image_dataset}'. "
+                        f"Available observation keys: {sorted(obs_grp.keys())}"
+                    )
             raw_obs = {
                 "state": {
                     "EE_POS": obs_grp["robot0_eef_pos"][:].astype(np.float32),
@@ -256,7 +260,8 @@ def load_hdf5_dataset(
                     "GRIPPER": obs_grp["robot0_gripper_qpos"][:, :1].astype(np.float32),
                 },
                 "image": {
-                    image_key: obs_grp[hdf5_image_dataset][:].astype(np.float32) / 255.0,
+                    key: obs_grp[IMAGE_KEY_TO_HDF5_DATASET[key]][:].astype(np.float32) / 255.0
+                    for key in image_keys
                 },
             }
             raw_action = {
@@ -284,13 +289,13 @@ def load_hdf5_dataset(
                 ep_idx=int(demo.split("_")[-1]),
                 quality_score=spec.label,
                 dataset_id=dataset_id,
-                image_key=image_key,
+                image_keys=image_keys,
             )
             episodes.append(ep)
     return episodes
 
 
-def stack_batches(episodes: Iterable[Dict], batch_size: int, image_key: str):
+def stack_batches(episodes: Iterable[Dict], batch_size: int, image_keys: list[str]):
     merged = {}
     for ep in episodes:
         for key, value in ep.items():
@@ -303,6 +308,7 @@ def stack_batches(episodes: Iterable[Dict], batch_size: int, image_key: str):
             "state": np.concatenate([x["state"] for x in merged["observation"]], axis=0),
             "image": {
                 image_key: np.concatenate([x["image"][image_key] for x in merged["observation"]], axis=0)
+                for image_key in image_keys
             },
         },
         "action": np.concatenate(merged["action"], axis=0),
@@ -319,7 +325,10 @@ def stack_batches(episodes: Iterable[Dict], batch_size: int, image_key: str):
         yield {
             "observation": {
                 "state": merged["observation"]["state"][start:end],
-                "image": {image_key: merged["observation"]["image"][image_key][start:end]},
+                "image": {
+                    image_key: merged["observation"]["image"][image_key][start:end]
+                    for image_key in image_keys
+                },
             },
             "action": merged["action"][start:end],
             "mask": merged["mask"][start:end],
@@ -416,21 +425,19 @@ def main():
 
     obs_structure = obs_config.structure["observation"].to_dict()
     action_structure = obs_config.structure["action"].to_dict()
-    image_keys = list(obs_structure.get("image", {}).keys())
+    checkpoint_image_keys = list(obs_structure.get("image", {}).keys())
     if args.camera is None:
-        if len(image_keys) != 1:
-            raise ValueError(
-                "Could not infer camera from checkpoint config. Pass --camera explicitly. "
-                f"Config image keys: {image_keys}"
-            )
-        image_key = image_keys[0]
+        image_keys = checkpoint_image_keys
+    elif args.camera == "both":
+        image_keys = ["agent", "wrist"]
     else:
-        image_key = args.camera
-    if image_key not in obs_structure.get("image", {}):
+        image_keys = [args.camera]
+    missing_image_keys = [key for key in image_keys if key not in obs_structure.get("image", {})]
+    if missing_image_keys:
         raise ValueError(
-            f"Checkpoint observation config expects image keys {image_keys}, but --camera={image_key} was requested."
+            f"Checkpoint observation config expects image keys {checkpoint_image_keys}, "
+            f"but requested image keys {image_keys}."
         )
-    hdf5_image_dataset = CAMERA_DATASETS[image_key]
 
     pred_fn = jax.jit(
         lambda batch, rng: ksg_estimator(
@@ -463,15 +470,14 @@ def main():
             obs_structure=obs_structure,
             action_structure=action_structure,
             stats=dataset_statistics,
-            image_key=image_key,
-            hdf5_image_dataset=hdf5_image_dataset,
+            image_keys=image_keys,
         )
 
         stats_list = []
         attrs = {k: [] for k in ("ep_idx", "step_idx", "quality_score", "dataset_id")}
         rng = jax.random.key(0)
 
-        for batch_index, batch in enumerate(stack_batches(episodes, args.batch_size, image_key=image_key)):
+        for batch_index, batch in enumerate(stack_batches(episodes, args.batch_size, image_keys=image_keys)):
             rng = jax.random.fold_in(rng, batch_index)
             batch = jax.tree.map(jnp.asarray, batch)
             pred = np.asarray(pred_fn(batch, rng))

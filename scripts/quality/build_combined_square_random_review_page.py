@@ -55,6 +55,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--manual-fps", type=int, default=20, help="FPS for collected videos exported from HDF5.")
     parser.add_argument(
+        "--mh-hdf5",
+        type=Path,
+        default=None,
+        help="Optional Square MH image.hdf5 for exporting paired agent-view videos. Defaults to <share-root>/../image.hdf5 when present.",
+    )
+    parser.add_argument("--mh-fps", type=int, default=20, help="FPS for Square MH videos exported from HDF5.")
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -128,6 +135,8 @@ def parse_mh_video(path: Path, category: str, share_root: Path) -> dict[str, obj
         "ep_idx": ep_idx,
         "title": f"MH demo_{ep_idx:04d}",
         "video": path.relative_to(share_root).as_posix(),
+        "wrist_video": path.relative_to(share_root).as_posix(),
+        "agent_video": None,
         "old_score": old_score,
         "label": label,
     }
@@ -144,6 +153,8 @@ def parse_manual_video(path: Path, share_root: Path) -> dict[str, object]:
         "ep_idx": ep_idx,
         "title": f"collected demo_{ep_idx:03d}",
         "video": os.path.relpath(path, share_root),
+        "wrist_video": os.path.relpath(path, share_root),
+        "agent_video": None,
         "old_score": None,
         "label": None,
     }
@@ -203,24 +214,61 @@ def write_video(video_path: Path, frames: np.ndarray, fps: int) -> int:
     return num_frames
 
 
-def export_manual_hdf5_videos(
+def export_hdf5_camera_videos(
     hdf5_path: Path,
     share_root: Path,
+    output_dir_name: str,
     camera: str,
     fps: int,
+    ep_indices: list[int] | None = None,
+    name_width: int = 3,
 ) -> Path:
     camera_key = CAMERA_KEY_BY_NAME[camera]
-    output_dir = share_root / f"manual_collected_hdf5_{camera}"
+    output_dir = share_root / output_dir_name
     output_dir.mkdir(parents=True, exist_ok=True)
+    keep = None if ep_indices is None else set(ep_indices)
 
     with h5py.File(hdf5_path, "r") as f:
         demo_keys = sorted(f["data"].keys(), key=lambda key: int(key.split("_")[-1]))
         for demo_key in demo_keys:
             ep_idx = int(demo_key.split("_")[-1])
-            video_path = output_dir / f"demo_{ep_idx:03d}.mp4"
+            if keep is not None and ep_idx not in keep:
+                continue
+            video_path = output_dir / f"demo_{ep_idx:0{name_width}d}.mp4"
             if video_path.exists():
                 continue
             frames = f["data"][demo_key]["obs"][camera_key][:]
+            write_video(video_path, frames, fps)
+
+    return output_dir
+
+
+def export_hdf5_paired_videos(
+    hdf5_path: Path,
+    share_root: Path,
+    output_dir_name: str,
+    fps: int,
+    ep_indices: list[int] | None = None,
+    name_width: int = 3,
+) -> Path:
+    output_dir = share_root / output_dir_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    keep = None if ep_indices is None else set(ep_indices)
+
+    with h5py.File(hdf5_path, "r") as f:
+        demo_keys = sorted(f["data"].keys(), key=lambda key: int(key.split("_")[-1]))
+        for demo_key in demo_keys:
+            ep_idx = int(demo_key.split("_")[-1])
+            if keep is not None and ep_idx not in keep:
+                continue
+            video_path = output_dir / f"demo_{ep_idx:0{name_width}d}.mp4"
+            if video_path.exists():
+                continue
+            obs = f["data"][demo_key]["obs"]
+            wrist = obs[CAMERA_KEY_BY_NAME["wrist"]][:]
+            agent = obs[CAMERA_KEY_BY_NAME["agent"]][:]
+            n = min(len(wrist), len(agent))
+            frames = np.concatenate([wrist[:n], agent[:n]], axis=2)
             write_video(video_path, frames, fps)
 
     return output_dir
@@ -254,14 +302,40 @@ def attach_scores(row: dict[str, object], scores: dict[str, dict[str, dict[str, 
     return row
 
 
-def collect_rows(share_root: Path, manual_video_root: Path, scores: dict[str, dict[str, dict[str, object]]]) -> list[dict[str, object]]:
+def collect_rows(
+    share_root: Path,
+    manual_video_root: Path,
+    scores: dict[str, dict[str, dict[str, object]]],
+    manual_agent_video_root: Path | None = None,
+    manual_paired_video_root: Path | None = None,
+    mh_agent_video_root: Path | None = None,
+    mh_paired_video_root: Path | None = None,
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for category in ("obs_full", "obs_partial"):
         for path in sorted((share_root / category).glob("*.mp4")):
-            rows.append(attach_scores(parse_mh_video(path, category, share_root), scores))
+            row = parse_mh_video(path, category, share_root)
+            if mh_agent_video_root is not None:
+                agent_video = mh_agent_video_root / f"demo_{int(row['ep_idx']):04d}.mp4"
+                if agent_video.exists():
+                    row["agent_video"] = agent_video.relative_to(share_root).as_posix()
+            if mh_paired_video_root is not None:
+                paired_video = mh_paired_video_root / f"demo_{int(row['ep_idx']):04d}.mp4"
+                if paired_video.exists():
+                    row["paired_video"] = paired_video.relative_to(share_root).as_posix()
+            rows.append(attach_scores(row, scores))
 
     for path in sorted(manual_video_root.glob("demo_*.mp4"), key=lambda p: int(p.stem.split("_")[1])):
-        rows.append(attach_scores(parse_manual_video(path, share_root), scores))
+        row = parse_manual_video(path, share_root)
+        if manual_agent_video_root is not None:
+            agent_video = manual_agent_video_root / f"demo_{int(row['ep_idx']):03d}.mp4"
+            if agent_video.exists():
+                row["agent_video"] = os.path.relpath(agent_video, share_root)
+        if manual_paired_video_root is not None:
+            paired_video = manual_paired_video_root / f"demo_{int(row['ep_idx']):03d}.mp4"
+            if paired_video.exists():
+                row["paired_video"] = os.path.relpath(paired_video, share_root)
+        rows.append(attach_scores(row, scores))
 
     rows.sort(key=lambda row: (str(row["category"]), -float(row["wrist_score"] or -math.inf), int(row["ep_idx"])))
     return rows
@@ -369,6 +443,21 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     .section-title p {{ margin: 0; color: var(--muted); }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }}
     .card {{ overflow: hidden; }}
+    .videos {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #050403; }}
+    .videos.paired {{ grid-template-columns: 1fr; }}
+    .video-panel {{ position: relative; background: #050403; }}
+    .video-panel span {{
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      z-index: 1;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(5, 4, 3, .68);
+      color: #fffaf0;
+      font-size: 12px;
+      letter-spacing: .03em;
+    }}
     video {{ display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #050403; }}
     .plot {{ padding: 12px 14px 8px; border-top: 1px solid var(--border); background: linear-gradient(180deg, rgba(15,109,103,.04), transparent); }}
     svg {{ width: 100%; height: 126px; overflow: visible; display: block; }}
@@ -554,9 +643,24 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
 
     function card(row) {{
       const oldScore = row.old_score === null ? '' : `<div class="metric"><span>old filename score</span><strong>${{fmt(row.old_score)}}</strong></div>`;
+      const agentVideo = row.agent_video ? `
+            <div class="video-panel"><span>agent view</span><video controls preload="metadata" src="${{row.agent_video}}" data-category="${{row.category}}" data-role="agent"></video></div>
+          ` : `
+            <div class="video-panel"><span>agent view unavailable</span><video controls preload="metadata" data-category="${{row.category}}" data-role="agent"></video></div>
+          `;
+      const videoHtml = row.paired_video ? `
+          <div class="videos paired">
+            <div class="video-panel"><span>wrist view | agent view</span><video controls preload="metadata" src="${{row.paired_video}}" data-category="${{row.category}}" data-role="wrist"></video></div>
+          </div>
+        ` : `
+          <div class="videos">
+            <div class="video-panel"><span>wrist view</span><video controls preload="metadata" src="${{row.wrist_video || row.video}}" data-category="${{row.category}}" data-role="wrist"></video></div>
+            ${{agentVideo}}
+          </div>
+        `;
       return `
         <article class="card" data-category="${{row.category}}" data-demo="${{row.ep_idx}}">
-          <video controls preload="metadata" src="${{row.video}}" data-category="${{row.category}}"></video>
+          ${{videoHtml}}
           ${{traceSvg(row)}}
           <div class="body">
             <div class="title"><strong>${{row.title}}</strong><span class="pill">${{categoryNames[row.category]}}</span></div>
@@ -568,7 +672,9 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
               <div class="metric"><span>label</span><strong>${{row.label === null ? 'n/a' : fmt(row.label, 1)}}</strong></div>
               <div class="metric"><span>dataset ep</span><strong>${{row.ep_idx}}</strong></div>
             </div>
-            <div class="path">${{row.video}}</div>
+            <div class="path">wrist: ${{row.wrist_video || row.video}}</div>
+            <div class="path">agent: ${{row.agent_video || 'not exported'}}</div>
+            <div class="path">paired: ${{row.paired_video || 'not exported'}}</div>
           </div>
         </article>`;
     }}
@@ -603,7 +709,7 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     }}
 
     function updatePlayhead(cardEl) {{
-      const video = cardEl.querySelector('video');
+      const video = cardEl.querySelector('video[data-role="wrist"]') || cardEl.querySelector('video');
       const playhead = cardEl.querySelector('.playhead');
       if (!video || !playhead) return;
       const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
@@ -630,17 +736,51 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
 
     function attachVideoSync() {{
       document.querySelectorAll('.card').forEach(cardEl => {{
-        const video = cardEl.querySelector('video');
-        if (!video) return;
-        applyPlaybackRate(video);
-        video.addEventListener('loadedmetadata', () => {{
+        const videos = Array.from(cardEl.querySelectorAll('video')).filter(video => video.currentSrc || video.getAttribute('src'));
+        if (!videos.length) return;
+        videos.forEach(applyPlaybackRate);
+        let syncing = false;
+
+        const syncPeers = source => {{
+          if (syncing) return;
+          syncing = true;
+          videos.forEach(peer => {{
+            if (peer === source) return;
+            if (Number.isFinite(source.currentTime) && Math.abs(peer.currentTime - source.currentTime) > 0.08) {{
+              peer.currentTime = Math.min(source.currentTime, Number.isFinite(peer.duration) ? peer.duration : source.currentTime);
+            }}
+          }});
+          syncing = false;
+        }};
+
+        videos.forEach(video => {{
           applyPlaybackRate(video);
-          updatePlayhead(cardEl);
+          video.addEventListener('loadedmetadata', () => {{
+            applyPlaybackRate(video);
+            updatePlayhead(cardEl);
+          }});
+          video.addEventListener('play', () => {{
+            syncPeers(video);
+            videos.forEach(peer => {{
+              if (peer !== video && peer.paused) peer.play().catch(() => {{}});
+            }});
+            syncLoop(video, cardEl);
+          }});
+          video.addEventListener('pause', () => {{
+            videos.forEach(peer => {{
+              if (peer !== video && !peer.paused) peer.pause();
+            }});
+            updatePlayhead(cardEl);
+          }});
+          video.addEventListener('seeked', () => {{
+            syncPeers(video);
+            updatePlayhead(cardEl);
+          }});
+          video.addEventListener('timeupdate', () => {{
+            syncPeers(video);
+            updatePlayhead(cardEl);
+          }});
         }});
-        video.addEventListener('play', () => syncLoop(video, cardEl));
-        video.addEventListener('pause', () => updatePlayhead(cardEl));
-        video.addEventListener('seeked', () => updatePlayhead(cardEl));
-        video.addEventListener('timeupdate', () => updatePlayhead(cardEl));
         updatePlayhead(cardEl);
       }});
     }}
@@ -671,19 +811,76 @@ def main() -> None:
     args = parse_args()
     output = args.output or args.share_root / "combined_scores.html"
     manual_video_root = args.manual_video_root
+    manual_agent_video_root = None
+    manual_paired_video_root = None
     manual_hdf5 = args.manual_hdf5
     if manual_hdf5 is None:
         candidate = args.manual_video_root / "image.hdf5"
         manual_hdf5 = candidate if candidate.exists() else None
     if manual_hdf5 is not None:
-        manual_video_root = export_manual_hdf5_videos(
+        manual_video_root = export_hdf5_camera_videos(
             hdf5_path=manual_hdf5,
             share_root=args.share_root,
-            camera=args.manual_camera,
+            output_dir_name="manual_collected_hdf5_wrist",
+            camera="wrist",
             fps=args.manual_fps,
+            name_width=3,
         )
+        manual_agent_video_root = export_hdf5_camera_videos(
+            hdf5_path=manual_hdf5,
+            share_root=args.share_root,
+            output_dir_name="manual_collected_hdf5_agent",
+            camera="agent",
+            fps=args.manual_fps,
+            name_width=3,
+        )
+        manual_paired_video_root = export_hdf5_paired_videos(
+            hdf5_path=manual_hdf5,
+            share_root=args.share_root,
+            output_dir_name="manual_collected_hdf5_paired",
+            fps=args.manual_fps,
+            name_width=3,
+        )
+
+    mh_agent_video_root = None
+    mh_paired_video_root = None
+    mh_hdf5 = args.mh_hdf5
+    if mh_hdf5 is None:
+        candidate = args.share_root.parent / "image.hdf5"
+        mh_hdf5 = candidate if candidate.exists() else None
+    if mh_hdf5 is not None:
+        selected_mh_eps = []
+        for category in ("obs_full", "obs_partial"):
+            for path in sorted((args.share_root / category).glob("*.mp4")):
+                selected_mh_eps.append(int(path.stem.split("_")[1]))
+        mh_agent_video_root = export_hdf5_camera_videos(
+            hdf5_path=mh_hdf5,
+            share_root=args.share_root,
+            output_dir_name="square_mh_hdf5_agent",
+            camera="agent",
+            fps=args.mh_fps,
+            ep_indices=selected_mh_eps,
+            name_width=4,
+        )
+        mh_paired_video_root = export_hdf5_paired_videos(
+            hdf5_path=mh_hdf5,
+            share_root=args.share_root,
+            output_dir_name="square_mh_hdf5_paired",
+            fps=args.mh_fps,
+            ep_indices=selected_mh_eps,
+            name_width=4,
+        )
+
     scores = load_scores(args.scores_root, args.max_trace_points)
-    rows = collect_rows(args.share_root, manual_video_root, scores)
+    rows = collect_rows(
+        args.share_root,
+        manual_video_root,
+        scores,
+        manual_agent_video_root=manual_agent_video_root,
+        manual_paired_video_root=manual_paired_video_root,
+        mh_agent_video_root=mh_agent_video_root,
+        mh_paired_video_root=mh_paired_video_root,
+    )
     summaries = {category: summarize(rows, category) for category in ("obs_full", "obs_partial", "manual_collected")}
     output.write_text(build_html(rows, summaries), encoding="utf-8")
     print(f"Wrote {output}")

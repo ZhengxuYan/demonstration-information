@@ -14,6 +14,8 @@ python scripts/train.py \
     --config=configs/quality/vae_robomimic_image.py:combined,s,1,wrist,square_mh=/path/to/mh@72707::random=/path/to/random@8055 \
     --path test \
     --name combined_wrist
+
+Use camera=both to train one fused observation VAE over both agent and wrist images.
 """
 
 import optax
@@ -100,28 +102,32 @@ def get_config(config_str="square/mh,sa,1"):
             f"for example square/mh,s,1,wrist. Got: {config_str}"
         )
     assert config_type in {"s", "a", "sa"}
-    assert camera in {"wrist", "agent"}
+    assert camera in {"wrist", "agent", "both"}
 
-    image_key = f"observation->image->{camera}"
+    cameras = ("agent", "wrist") if camera == "both" else (camera,)
+    image_keys = [f"observation->image->{key}" for key in cameras]
     dataset_specs = _parse_dataset_specs(ds, dataset_path)
     has_multiple_datasets = len(dataset_specs) > 1
+    image_encoders = {key: ModuleSpec.create(ResNet18, num_kp=64) for key in image_keys}
+    image_decoders = {key: ModuleSpec.create(ResNet18Decoder) for key in image_keys}
+    image_weights = {key: 1 / 200 for key in image_keys}
 
     encoder_keys = {
-        "s": {"observation->state": None, image_key: ModuleSpec.create(ResNet18, num_kp=64)},
+        "s": {"observation->state": None, **image_encoders},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            image_key: ModuleSpec.create(ResNet18, num_kp=64),
+            **image_encoders,
             "action": None,
         },
     }[config_type]
 
     decoder_keys = {
-        "s": {"observation->state": None, image_key: ModuleSpec.create(ResNet18Decoder)},
+        "s": {"observation->state": None, **image_decoders},
         "a": {"action": None},
         "sa": {
             "observation->state": None,
-            image_key: ModuleSpec.create(ResNet18Decoder),
+            **image_decoders,
             "action": None,
         },
     }[config_type]
@@ -134,9 +140,9 @@ def get_config(config_str="square/mh,sa,1"):
     }[config_type]
 
     weights = {
-        "s": {"observation->state": 1.0, image_key: 1 / 200},
+        "s": {"observation->state": 1.0, **image_weights},
         "a": {"action": 1.0},
-        "sa": {"observation->state": 1.0, image_key: 1 / 200, "action": 1.0},
+        "sa": {"observation->state": 1.0, **image_weights, "action": 1.0},
     }[config_type]
 
     # Define the structure
@@ -147,9 +153,7 @@ def get_config(config_str="square/mh,sa,1"):
                 StateEncoding.EE_QUAT: NormalizationType.GAUSSIAN,
                 StateEncoding.GRIPPER: NormalizationType.GAUSSIAN,
             },
-            "image": {
-                camera: (84, 84),
-            },
+            "image": {key: (84, 84) for key in cameras},
         },
         "action": {
             "desired_delta": {
