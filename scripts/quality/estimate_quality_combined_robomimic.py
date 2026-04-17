@@ -67,6 +67,14 @@ flags.DEFINE_multi_string(
     None,
     "Extra dataset in the form name=/path/to/tfds_builder_dir. Repeat for multiple datasets.",
 )
+flags.DEFINE_bool(
+    "distance_diagnostics",
+    False,
+    (
+        "Save diagnostics for the KSG L-infinity joint distance, including how often action-latent "
+        "L2 distance is larger than observation-latent L2 distance."
+    ),
+)
 
 
 @dataclass
@@ -149,22 +157,42 @@ def main(_):
     obs_alg, obs_state, _, _ = load_checkpoint(FLAGS.obs_ckpt)
     action_alg, action_state, _, _ = load_checkpoint(FLAGS.action_ckpt)
 
-    pred_fn = jax.jit(
-        lambda batch, rng: (
-            quality_estimators.ksg_estimator(
+    diagnostic_ks = np.arange(5, 8)
+    if FLAGS.distance_diagnostics:
+        def pred_with_distance_diagnostics(batch, rng):
+            pred, distance_diagnostics = quality_estimators.ksg_estimator_with_distance_diagnostics(
                 batch,
                 rng,
-                ks=np.arange(5, 8),
+                ks=diagnostic_ks,
                 obs_alg=obs_alg,
                 obs_state=obs_state,
                 action_alg=action_alg,
                 action_state=action_state,
+            )
+            return pred, {k: batch[k] for k in quality_estimators.AGGREGATION_KEYS}, distance_diagnostics
+
+        pred_fn = jax.jit(
+            pred_with_distance_diagnostics,
+            in_shardings=(dp_sharding, None),
+            out_shardings=(rep_sharding, rep_sharding, rep_sharding),
+        )
+    else:
+        pred_fn = jax.jit(
+            lambda batch, rng: (
+                quality_estimators.ksg_estimator(
+                    batch,
+                    rng,
+                    ks=diagnostic_ks,
+                    obs_alg=obs_alg,
+                    obs_state=obs_state,
+                    action_alg=action_alg,
+                    action_state=action_state,
+                ),
+                {k: batch[k] for k in quality_estimators.AGGREGATION_KEYS},
             ),
-            {k: batch[k] for k in quality_estimators.AGGREGATION_KEYS},
-        ),
-        in_shardings=(dp_sharding, None),
-        out_shardings=(rep_sharding, rep_sharding),
-    )
+            in_shardings=(dp_sharding, None),
+            out_shardings=(rep_sharding, rep_sharding),
+        )
 
     dataloader_config = config.dataloader.to_dict()
     dataloader_config["datasets"] = dataset_cfgs
@@ -185,15 +213,34 @@ def main(_):
     ds, _, _, dataset_ids = make_dataloader(**dataloader_config, structure=structure, split_for_jax=True)
     ds = map(shard, ds)
     rng = jax.random.key(jax.process_index())
-    scores = quality_estimators.estimate_quality(ds, pred_fn, dataset_ids, rng)
+    if FLAGS.distance_diagnostics:
+        scores, distance_diagnostics = quality_estimators.estimate_quality(
+            ds,
+            pred_fn,
+            dataset_ids,
+            rng,
+            collect_distance_diagnostics=True,
+            distance_diagnostic_ks=diagnostic_ks,
+        )
+    else:
+        scores = quality_estimators.estimate_quality(ds, pred_fn, dataset_ids, rng)
+        distance_diagnostics = None
 
     pprint.pprint(scores)
+    if distance_diagnostics is not None:
+        pprint.pprint(distance_diagnostics)
 
     if jax.process_index() != 0:
         return
 
     tf.io.gfile.makedirs(FLAGS.output)
+    if distance_diagnostics is not None:
+        with tf.io.gfile.GFile(os.path.join(FLAGS.output, "distance_diagnostics.json"), "w") as f:
+            json.dump(distance_diagnostics, f, indent=2, sort_keys=True)
+
     for ds_name, ds_scores in scores.items():
+        if distance_diagnostics is not None:
+            ds_scores["distance_diagnostics"] = distance_diagnostics
         with tf.io.gfile.GFile(os.path.join(FLAGS.output, ds_name + ".pkl"), "wb") as f:
             pickle.dump(ds_scores, f)
 

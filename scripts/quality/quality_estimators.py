@@ -56,6 +56,58 @@ def ksg_estimator(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
     return -jnp.mean(digamma(obs_count) + digamma(action_count), axis=-1)
 
 
+def _distance_diagnostic_stats(obs_dist, action_dist, joint_dist, ks):
+    """Summarize which marginal dominates the KSG L-infinity joint distance."""
+    batch_size = obs_dist.shape[0]
+    off_diagonal = ~jnp.eye(batch_size, dtype=bool)
+
+    all_obs = obs_dist[off_diagonal]
+    all_action = action_dist[off_diagonal]
+    all_joint = joint_dist[off_diagonal]
+
+    joint_order = jnp.argsort(joint_dist, axis=-1)[:, ks]
+    knn_obs = jnp.take_along_axis(obs_dist, joint_order, axis=1).reshape(-1)
+    knn_action = jnp.take_along_axis(action_dist, joint_order, axis=1).reshape(-1)
+    knn_joint = jnp.take_along_axis(joint_dist, joint_order, axis=1).reshape(-1)
+
+    def summarize(prefix, obs_values, action_values, joint_values):
+        return {
+            f"{prefix}_count": jnp.asarray(obs_values.size, dtype=jnp.float32),
+            f"{prefix}_action_gt_obs_count": jnp.sum(action_values > obs_values, dtype=jnp.float32),
+            f"{prefix}_obs_gt_action_count": jnp.sum(obs_values > action_values, dtype=jnp.float32),
+            f"{prefix}_equal_count": jnp.sum(action_values == obs_values, dtype=jnp.float32),
+            f"{prefix}_obs_l2_sum": jnp.sum(obs_values),
+            f"{prefix}_action_l2_sum": jnp.sum(action_values),
+            f"{prefix}_joint_linf_sum": jnp.sum(joint_values),
+            f"{prefix}_joint_linf_max": jnp.max(joint_values),
+            f"{prefix}_action_minus_obs_sum": jnp.sum(action_values - obs_values),
+        }
+
+    return {
+        **summarize("all_pairs", all_obs, all_action, all_joint),
+        **summarize("joint_knn", knn_obs, knn_action, knn_joint),
+    }
+
+
+def ksg_estimator_with_distance_diagnostics(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
+    # Get the state and action encoding
+    obs_rng, action_rng = jax.random.split(rng)
+    z_obs = obs_alg.predict(obs_state, batch, obs_rng)
+    z_action = action_alg.predict(action_state, batch, action_rng)
+
+    obs_dist = _l2_dists(z_obs)
+    action_dist = _l2_dists(z_action)
+
+    joint_dist = jnp.maximum(obs_dist, action_dist)
+    joint_knn_dists = jnp.sort(joint_dist, axis=-1)[:, ks]
+
+    obs_count = jnp.sum(obs_dist[:, :, None] < joint_knn_dists[:, None, :], axis=1)
+    action_count = jnp.sum(action_dist[:, :, None] < joint_knn_dists[:, None, :], axis=1)
+    score = -jnp.mean(digamma(obs_count) + digamma(action_count), axis=-1)
+
+    return score, _distance_diagnostic_stats(obs_dist, action_dist, joint_dist, ks)
+
+
 def biksg_estimator(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
     # Get the state and action encoding
     obs_rng, action_rng = jax.random.split(rng)
@@ -314,16 +366,65 @@ def _aggregate_stats(stats, attrs, raw_stats=None):
     return scores
 
 
-def estimate_quality(ds, pred_fn, dataset_ids, rng):
+def merge_distance_diagnostics(total, batch_diag):
+    for key, value in batch_diag.items():
+        value = float(np.asarray(value))
+        if key.endswith("_max"):
+            total[key] = max(total.get(key, float("-inf")), value)
+        else:
+            total[key] = total.get(key, 0.0) + value
+    return total
+
+
+def finalize_distance_diagnostics(total, ks):
+    out = {
+        "ks": [int(k) for k in ks.tolist()],
+        "note": (
+            "KSG uses L-infinity over marginal latent L2 distances: "
+            "joint_distance(i,j)=max(obs_l2(i,j), action_l2(i,j)). "
+            "action_gt_obs_frac is the fraction where action_l2 > obs_l2, so action dominates the joint radius."
+        ),
+    }
+    for prefix in ("all_pairs", "joint_knn"):
+        count = total.get(f"{prefix}_count", 0.0)
+        if count <= 0:
+            out[prefix] = {"count": 0}
+            continue
+        action_gt = total.get(f"{prefix}_action_gt_obs_count", 0.0)
+        obs_gt = total.get(f"{prefix}_obs_gt_action_count", 0.0)
+        equal = total.get(f"{prefix}_equal_count", 0.0)
+        out[prefix] = {
+            "count": int(count),
+            "action_gt_obs_count": int(action_gt),
+            "obs_gt_action_count": int(obs_gt),
+            "equal_count": int(equal),
+            "action_gt_obs_frac": action_gt / count,
+            "obs_gt_action_frac": obs_gt / count,
+            "equal_frac": equal / count,
+            "mean_obs_l2": total.get(f"{prefix}_obs_l2_sum", 0.0) / count,
+            "mean_action_l2": total.get(f"{prefix}_action_l2_sum", 0.0) / count,
+            "mean_joint_linf": total.get(f"{prefix}_joint_linf_sum", 0.0) / count,
+            "max_joint_linf": total.get(f"{prefix}_joint_linf_max", float("nan")),
+            "mean_action_minus_obs_l2": total.get(f"{prefix}_action_minus_obs_sum", 0.0) / count,
+        }
+    return out
+
+
+def estimate_quality(ds, pred_fn, dataset_ids, rng, collect_distance_diagnostics=False, distance_diagnostic_ks=None):
     """
     Note that this is a separate function to allow for jitting of pred_fn and sharding of the ds.
     """
     stats = []
     attributes = {attr: [] for attr in AGGREGATION_KEYS}
+    distance_diagnostics = {}
 
     for i, batch in tqdm.tqdm(enumerate(ds), dynamic_ncols=True):
         rng = jax.random.fold_in(rng, i)
-        pred, attrs = pred_fn(batch, rng)
+        if collect_distance_diagnostics:
+            pred, attrs, batch_distance_diagnostics = pred_fn(batch, rng)
+            distance_diagnostics = merge_distance_diagnostics(distance_diagnostics, batch_distance_diagnostics)
+        else:
+            pred, attrs = pred_fn(batch, rng)
         no_nan_idx = ~jnp.isnan(pred)
         stats.append(pred[no_nan_idx])
         for k, v in attrs.items():
@@ -351,4 +452,9 @@ def estimate_quality(ds, pred_fn, dataset_ids, rng):
             stats[mask], {k: v[mask] for k, v in attributes.items()}, raw_stats=raw_stats[mask]
         )
 
+    if collect_distance_diagnostics:
+        return scores, finalize_distance_diagnostics(
+            distance_diagnostics,
+            np.asarray(distance_diagnostic_ks if distance_diagnostic_ks is not None else []),
+        )
     return scores

@@ -179,3 +179,10 @@ combined_square_random_scores/
 square_mh_wrist_manual_share_deploy/
 square_mh_wrist_agent_paired_deploy/
 square_mh_wrist_agent_paired_small_deploy/
+square_mh_gap_crisp_deploy/
+square_mh_gap_high_deploy/
+square_mh_multiview_scores/
+square_mh_wrist_agent_paired_medium_deploy/
+vae_export/
+robomimic_policy_nll_review/
+robomimic_policy_scores/

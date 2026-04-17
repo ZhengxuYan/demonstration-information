@@ -42,6 +42,7 @@ latest_ckpt_dir() {
 
 BOTH_OBS_CKPT="${BOTH_OBS_CKPT:-$(latest_ckpt_dir 'square_mh_both_obs_vae_seed1_*')}"
 ACTION_CKPT="${ACTION_CKPT:-$(latest_ckpt_dir 'square_mh_action_vae_seed1_*')}"
+DISTANCE_DIAGNOSTICS="${DISTANCE_DIAGNOSTICS:-0}"
 
 if [[ -z "${BOTH_OBS_CKPT}" ]]; then
   echo "Could not find square_mh_both_obs_vae_seed1_* under ${CKPT_ROOT}" >&2
@@ -53,8 +54,14 @@ if [[ -z "${ACTION_CKPT}" ]]; then
   exit 1
 fi
 
+EXTRA_FLAGS=()
+if [[ "${DISTANCE_DIAGNOSTICS}" == "1" ]]; then
+  EXTRA_FLAGS+=(--distance_diagnostics)
+fi
+
 python scripts/quality/estimate_quality_combined_robomimic.py \
   --obs_ckpt="${BOTH_OBS_CKPT}" \
   --action_ckpt="${ACTION_CKPT}" \
   --batch_size=1024 \
-  --output="${OUT_ROOT}/both"
+  --output="${OUT_ROOT}/both" \
+  "${EXTRA_FLAGS[@]}"

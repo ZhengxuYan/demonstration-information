@@ -40,6 +40,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--share-root", type=Path, required=True, help="Folder containing obs_full and obs_partial.")
     parser.add_argument("--scores-root", type=Path, required=True, help="Folder containing wrist/ and agent/ score pkl files.")
+    parser.add_argument(
+        "--mh-only-both-scores-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional Square-MH-only fused multi-view score root. "
+            "Expected to contain both/square_mh.pkl."
+        ),
+    )
     parser.add_argument("--manual-video-root", type=Path, required=True, help="Folder containing collected demo_*.mp4 files.")
     parser.add_argument(
         "--manual-hdf5",
@@ -113,13 +122,21 @@ def load_score_bundle(path: Path, max_trace_points: int) -> dict[str, object]:
 
 
 def load_scores(scores_root: Path, max_trace_points: int) -> dict[str, dict[str, dict[str, object]]]:
-    return {
+    scores = {
         camera: {
             dataset: load_score_bundle(scores_root / camera / f"{dataset}.pkl", max_trace_points)
             for dataset in DATASETS
         }
         for camera in CAMERAS
     }
+    both_root = scores_root / "both"
+    if both_root.exists():
+        scores["both"] = {
+            dataset: load_score_bundle(both_root / f"{dataset}.pkl", max_trace_points)
+            for dataset in DATASETS
+            if (both_root / f"{dataset}.pkl").exists()
+        }
+    return scores
 
 
 def parse_mh_video(path: Path, category: str, share_root: Path) -> dict[str, object]:
@@ -274,7 +291,11 @@ def export_hdf5_paired_videos(
     return output_dir
 
 
-def attach_scores(row: dict[str, object], scores: dict[str, dict[str, dict[str, object]]]) -> dict[str, object]:
+def attach_scores(
+    row: dict[str, object],
+    scores: dict[str, dict[str, dict[str, object]]],
+    mh_only_both_scores: dict[str, object] | None = None,
+) -> dict[str, object]:
     dataset = str(row["dataset"])
     ep_idx = int(row["ep_idx"])
     row = dict(row)
@@ -285,17 +306,30 @@ def attach_scores(row: dict[str, object], scores: dict[str, dict[str, dict[str, 
     agent_score = agent_bundle["ep_scores"].get(ep_idx)  # type: ignore[index]
     wrist_trace = wrist_bundle["traces"].get(ep_idx)  # type: ignore[index]
     agent_trace = agent_bundle["traces"].get(ep_idx)  # type: ignore[index]
+    both_bundle = scores.get("both", {}).get(dataset)
+    both_score = None if both_bundle is None else both_bundle["ep_scores"].get(ep_idx)  # type: ignore[index]
+    both_trace = None if both_bundle is None else both_bundle["traces"].get(ep_idx)  # type: ignore[index]
+
+    mh_only_both_score = None
+    mh_only_both_trace = None
+    if dataset == "square_mh" and mh_only_both_scores is not None:
+        mh_only_both_score = mh_only_both_scores["ep_scores"].get(ep_idx)  # type: ignore[index]
+        mh_only_both_trace = mh_only_both_scores["traces"].get(ep_idx)  # type: ignore[index]
 
     row["wrist_score"] = wrist_score
     row["agent_score"] = agent_score
     row["delta_score"] = None if wrist_score is None or agent_score is None else agent_score - wrist_score
+    row["both_score"] = both_score
+    row["mh_only_both_score"] = mh_only_both_score
     row["wrist_trace"] = wrist_trace
     row["agent_trace"] = agent_trace
+    row["both_trace"] = both_trace
+    row["mh_only_both_trace"] = mh_only_both_trace
     row["num_frames"] = max(
         [0]
         + [
             int(max(trace["steps"])) + 1
-            for trace in (wrist_trace, agent_trace)
+            for trace in (wrist_trace, agent_trace, both_trace, mh_only_both_trace)
             if trace is not None and trace.get("steps")
         ]
     )
@@ -306,6 +340,7 @@ def collect_rows(
     share_root: Path,
     manual_video_root: Path,
     scores: dict[str, dict[str, dict[str, object]]],
+    mh_only_both_scores: dict[str, object] | None = None,
     manual_agent_video_root: Path | None = None,
     manual_paired_video_root: Path | None = None,
     mh_agent_video_root: Path | None = None,
@@ -323,7 +358,7 @@ def collect_rows(
                 paired_video = mh_paired_video_root / f"demo_{int(row['ep_idx']):04d}.mp4"
                 if paired_video.exists():
                     row["paired_video"] = paired_video.relative_to(share_root).as_posix()
-            rows.append(attach_scores(row, scores))
+            rows.append(attach_scores(row, scores, mh_only_both_scores=mh_only_both_scores))
 
     for path in sorted(manual_video_root.glob("demo_*.mp4"), key=lambda p: int(p.stem.split("_")[1])):
         row = parse_manual_video(path, share_root)
@@ -335,7 +370,7 @@ def collect_rows(
             paired_video = manual_paired_video_root / f"demo_{int(row['ep_idx']):03d}.mp4"
             if paired_video.exists():
                 row["paired_video"] = os.path.relpath(paired_video, share_root)
-        rows.append(attach_scores(row, scores))
+        rows.append(attach_scores(row, scores, mh_only_both_scores=mh_only_both_scores))
 
     rows.sort(key=lambda row: (str(row["category"]), -float(row["wrist_score"] or -math.inf), int(row["ep_idx"])))
     return rows
@@ -345,6 +380,10 @@ def summarize(rows: list[dict[str, object]], category: str) -> dict[str, object]
     subset = [row for row in rows if row["category"] == category]
     wrist = [float(row["wrist_score"]) for row in subset if row["wrist_score"] is not None]
     agent = [float(row["agent_score"]) for row in subset if row["agent_score"] is not None]
+    both = [float(row["both_score"]) for row in subset if row.get("both_score") is not None]
+    mh_only_both = [
+        float(row["mh_only_both_score"]) for row in subset if row.get("mh_only_both_score") is not None
+    ]
     delta = [float(row["delta_score"]) for row in subset if row["delta_score"] is not None]
 
     def metric(vals: list[float]) -> dict[str, float | None]:
@@ -357,7 +396,14 @@ def summarize(rows: list[dict[str, object]], category: str) -> dict[str, object]
             "max": float(max(vals)),
         }
 
-    return {"count": len(subset), "wrist": metric(wrist), "agent": metric(agent), "delta": metric(delta)}
+    return {
+        "count": len(subset),
+        "wrist": metric(wrist),
+        "agent": metric(agent),
+        "both": metric(both),
+        "mh_only_both": metric(mh_only_both),
+        "delta": metric(delta),
+    }
 
 
 def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, object]]) -> str:
@@ -379,6 +425,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
       --border: #d7cdbc;
       --wrist: #0f6d67;
       --agent: #b54a2a;
+      --both: #315f9c;
+      --mh-only-both: #b47a12;
       --soft: #ddeee8;
       --shadow: rgba(32, 25, 18, 0.08);
     }}
@@ -435,7 +483,7 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     }}
     .summary-card {{ padding: 14px 16px; }}
     .summary-card h2 {{ margin: 0 0 8px; font-size: 18px; }}
-    .summary-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }}
+    .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }}
     .metric span, .meta span {{ display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .055em; }}
     .metric strong {{ font-size: 18px; }}
     .section-title {{ display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }}
@@ -467,11 +515,15 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     .line {{ fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }}
     .wrist-line {{ stroke: var(--wrist); }}
     .agent-line {{ stroke: var(--agent); }}
+    .both-line {{ stroke: var(--both); }}
+    .mh-only-both-line {{ stroke: var(--mh-only-both); stroke-dasharray: 5 4; }}
     .playhead {{ stroke: #16120e; stroke-width: 2; opacity: .78; }}
-    .legend {{ display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }}
+    .legend {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; color: var(--muted); font-size: 12px; }}
     .swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 5px; }}
     .swatch.wrist {{ background: var(--wrist); }}
     .swatch.agent {{ background: var(--agent); }}
+    .swatch.both {{ background: var(--both); }}
+    .swatch.mh-only-both {{ background: var(--mh-only-both); }}
     .body {{ padding: 12px 14px 15px; display: grid; gap: 9px; }}
     .title {{ display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }}
     .title strong {{ font-size: 17px; }}
@@ -480,6 +532,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     .meta strong {{ font-size: 17px; }}
     .wrist {{ color: var(--wrist); }}
     .agent {{ color: var(--agent); }}
+    .both {{ color: var(--both); }}
+    .mh-only-both {{ color: var(--mh-only-both); }}
     .path {{ color: var(--muted); font-size: 12px; word-break: break-all; }}
     .hidden {{ display: none !important; }}
     @media (max-width: 700px) {{
@@ -495,8 +549,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     <p class="lede">
       Three categories are shown: Square MH demos where the wrist view fully observes the opening,
       Square MH demos where it is partially occluded, and the manually collected random-init demos.
-      Each card uses the combined Square MH + random collected checkpoints and shows two transition-level score traces:
-      wrist camera and third-person agent camera.
+      Each card shows transition-level DemInf score traces for wrist-only, third-person-only,
+      and fused wrist+third-person checkpoints. Square MH cards also include the MH-only fused checkpoint.
     </p>
     <div class="toolbar">
       <button class="filter active" data-category="all">All</button>
@@ -507,6 +561,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
         <option value="category">Sort by category</option>
         <option value="wrist_desc">Wrist score high to low</option>
         <option value="agent_desc">Agent score high to low</option>
+        <option value="both_desc">Both-view score high to low</option>
+        <option value="mh_only_both_desc">MH-only both high to low</option>
         <option value="delta_desc">Agent - wrist high to low</option>
         <option value="demo">Demo index</option>
       </select>
@@ -557,6 +613,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
             <div class="metric"><span>count</span><strong>${{s.count}}</strong></div>
             ${{statBlock('wrist mean', s.wrist)}}
             ${{statBlock('agent mean', s.agent)}}
+            ${{statBlock('both mean', s.both)}}
+            ${{statBlock('MH-only both', s.mh_only_both)}}
             ${{statBlock('delta mean', s.delta)}}
           </div>
         </article>
@@ -612,7 +670,9 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
       const window = smoothingWindow();
       const wristTrace = smoothTrace(row.wrist_trace, window);
       const agentTrace = smoothTrace(row.agent_trace, window);
-      const traces = [wristTrace, agentTrace].filter(Boolean);
+      const bothTrace = smoothTrace(row.both_trace, window);
+      const mhOnlyBothTrace = smoothTrace(row.mh_only_both_trace, window);
+      const traces = [wristTrace, agentTrace, bothTrace, mhOnlyBothTrace].filter(Boolean);
       if (traces.length === 0) return '<div class="plot">No transition trace available.</div>';
       const allSteps = traces.flatMap(t => t.steps);
       const allScores = traces.flatMap(t => t.scores);
@@ -632,11 +692,15 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
             <text class="axis-label" x="4" y="112">${{fmt(yMin, 2)}}</text>
             <path class="line wrist-line" d="${{pathFromTrace(wristTrace, xMin, xMax, yMin, yMax)}}"></path>
             <path class="line agent-line" d="${{pathFromTrace(agentTrace, xMin, xMax, yMin, yMax)}}"></path>
+            <path class="line both-line" d="${{pathFromTrace(bothTrace, xMin, xMax, yMin, yMax)}}"></path>
+            <path class="line mh-only-both-line" d="${{pathFromTrace(mhOnlyBothTrace, xMin, xMax, yMin, yMax)}}"></path>
             <line class="playhead" x1="36" y1="8" x2="36" y2="112"></line>
           </svg>
           <div class="legend">
             <span><span class="swatch wrist"></span>wrist trace, slope/100: <strong>${{fmt(slopePer100(wristTrace), 3)}}</strong></span>
             <span><span class="swatch agent"></span>agent trace, slope/100: <strong>${{fmt(slopePer100(agentTrace), 3)}}</strong></span>
+            <span><span class="swatch both"></span>both-view, slope/100: <strong>${{fmt(slopePer100(bothTrace), 3)}}</strong></span>
+            ${{mhOnlyBothTrace ? `<span><span class="swatch mh-only-both"></span>MH-only both, slope/100: <strong>${{fmt(slopePer100(mhOnlyBothTrace), 3)}}</strong></span>` : ''}}
           </div>
         </div>`;
     }}
@@ -667,6 +731,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
             <div class="meta">
               <div class="metric"><span>wrist score</span><strong class="wrist">${{fmt(row.wrist_score)}}</strong></div>
               <div class="metric"><span>agent score</span><strong class="agent">${{fmt(row.agent_score)}}</strong></div>
+              <div class="metric"><span>both-view score</span><strong class="both">${{fmt(row.both_score)}}</strong></div>
+              <div class="metric"><span>MH-only both</span><strong class="mh-only-both">${{fmt(row.mh_only_both_score)}}</strong></div>
               <div class="metric"><span>agent - wrist</span><strong>${{fmt(row.delta_score)}}</strong></div>
               ${{oldScore}}
               <div class="metric"><span>label</span><strong>${{row.label === null ? 'n/a' : fmt(row.label, 1)}}</strong></div>
@@ -685,6 +751,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
       const num = (row, key) => row[key] ?? -Infinity;
       if (mode === 'wrist_desc') copy.sort((a, b) => num(b, 'wrist_score') - num(a, 'wrist_score'));
       else if (mode === 'agent_desc') copy.sort((a, b) => num(b, 'agent_score') - num(a, 'agent_score'));
+      else if (mode === 'both_desc') copy.sort((a, b) => num(b, 'both_score') - num(a, 'both_score'));
+      else if (mode === 'mh_only_both_desc') copy.sort((a, b) => num(b, 'mh_only_both_score') - num(a, 'mh_only_both_score'));
       else if (mode === 'delta_desc') copy.sort((a, b) => num(b, 'delta_score') - num(a, 'delta_score'));
       else if (mode === 'demo') copy.sort((a, b) => a.ep_idx - b.ep_idx || a.category.localeCompare(b.category));
       else copy.sort((a, b) => a.category.localeCompare(b.category) || num(b, 'wrist_score') - num(a, 'wrist_score'));
@@ -841,6 +909,16 @@ def main() -> None:
             fps=args.manual_fps,
             name_width=3,
         )
+    else:
+        existing_wrist = args.share_root / "manual_collected_hdf5_wrist"
+        existing_agent = args.share_root / "manual_collected_hdf5_agent"
+        existing_paired = args.share_root / "manual_collected_hdf5_paired"
+        if existing_wrist.exists():
+            manual_video_root = existing_wrist
+        if existing_agent.exists():
+            manual_agent_video_root = existing_agent
+        if existing_paired.exists():
+            manual_paired_video_root = existing_paired
 
     mh_agent_video_root = None
     mh_paired_video_root = None
@@ -870,12 +948,25 @@ def main() -> None:
             ep_indices=selected_mh_eps,
             name_width=4,
         )
+    else:
+        existing_agent = args.share_root / "square_mh_hdf5_agent"
+        existing_paired = args.share_root / "square_mh_hdf5_paired"
+        if existing_agent.exists():
+            mh_agent_video_root = existing_agent
+        if existing_paired.exists():
+            mh_paired_video_root = existing_paired
 
     scores = load_scores(args.scores_root, args.max_trace_points)
+    mh_only_both_scores = None
+    if args.mh_only_both_scores_root is not None:
+        mh_only_path = args.mh_only_both_scores_root / "both" / "square_mh.pkl"
+        if mh_only_path.exists():
+            mh_only_both_scores = load_score_bundle(mh_only_path, args.max_trace_points)
     rows = collect_rows(
         args.share_root,
         manual_video_root,
         scores,
+        mh_only_both_scores=mh_only_both_scores,
         manual_agent_video_root=manual_agent_video_root,
         manual_paired_video_root=manual_paired_video_root,
         mh_agent_video_root=mh_agent_video_root,

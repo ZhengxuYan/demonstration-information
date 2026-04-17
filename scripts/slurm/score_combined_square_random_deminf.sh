@@ -38,6 +38,7 @@ ACTION_CKPT="${CKPT_ROOT}/combined_square_random_action_vae_seed1_20260414_19330
 WRIST_OBS_CKPT="${CKPT_ROOT}/combined_square_random_wrist_obs_vae_seed1_20260414_193937"
 AGENT_OBS_CKPT="${CKPT_ROOT}/combined_square_random_agent_obs_vae_seed1_20260414_193224"
 BOTH_OBS_CKPT="${BOTH_OBS_CKPT:-}"
+DISTANCE_DIAGNOSTICS="${DISTANCE_DIAGNOSTICS:-0}"
 
 mkdir -p /iris/u/jasonyan/slurm "${OUT_ROOT}"
 
@@ -51,13 +52,18 @@ run_score() {
   local camera="$1"
   local obs_ckpt="$2"
   local output="${OUT_ROOT}/${camera}"
+  local extra_flags=()
+  if [[ "${DISTANCE_DIAGNOSTICS}" == "1" ]]; then
+    extra_flags+=(--distance_diagnostics)
+  fi
 
   python scripts/quality/estimate_quality_combined_robomimic.py \
     --obs_ckpt="${obs_ckpt}" \
     --action_ckpt="${ACTION_CKPT}" \
     --batch_size=1024 \
     --output="${output}" \
-    --extra_dataset="random_square_post=${RANDOM_RLDS}"
+    --extra_dataset="random_square_post=${RANDOM_RLDS}" \
+    "${extra_flags[@]}"
 }
 
 latest_ckpt_dir() {

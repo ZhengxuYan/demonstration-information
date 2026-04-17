@@ -18,6 +18,7 @@ python scripts/quality/score_robomimic_hdf5.py \
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pickle
 from dataclasses import dataclass
@@ -67,6 +68,57 @@ def ksg_estimator(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
     return -jnp.mean(digamma(obs_count) + digamma(action_count), axis=-1)
 
 
+def _distance_diagnostic_stats(obs_dist, action_dist, joint_dist, ks):
+    """Summarize which marginal dominates the L-infinity joint distance."""
+    batch_size = obs_dist.shape[0]
+    off_diagonal = ~jnp.eye(batch_size, dtype=bool)
+
+    all_obs = obs_dist[off_diagonal]
+    all_action = action_dist[off_diagonal]
+    all_joint = joint_dist[off_diagonal]
+
+    joint_order = jnp.argsort(joint_dist, axis=-1)[:, ks]
+    knn_obs = jnp.take_along_axis(obs_dist, joint_order, axis=1).reshape(-1)
+    knn_action = jnp.take_along_axis(action_dist, joint_order, axis=1).reshape(-1)
+    knn_joint = jnp.take_along_axis(joint_dist, joint_order, axis=1).reshape(-1)
+
+    def summarize(prefix, obs_values, action_values, joint_values):
+        return {
+            f"{prefix}_count": jnp.asarray(obs_values.size, dtype=jnp.float32),
+            f"{prefix}_action_gt_obs_count": jnp.sum(action_values > obs_values, dtype=jnp.float32),
+            f"{prefix}_obs_gt_action_count": jnp.sum(obs_values > action_values, dtype=jnp.float32),
+            f"{prefix}_equal_count": jnp.sum(action_values == obs_values, dtype=jnp.float32),
+            f"{prefix}_obs_l2_sum": jnp.sum(obs_values),
+            f"{prefix}_action_l2_sum": jnp.sum(action_values),
+            f"{prefix}_joint_linf_sum": jnp.sum(joint_values),
+            f"{prefix}_joint_linf_max": jnp.max(joint_values),
+            f"{prefix}_action_minus_obs_sum": jnp.sum(action_values - obs_values),
+        }
+
+    return {
+        **summarize("all_pairs", all_obs, all_action, all_joint),
+        **summarize("joint_knn", knn_obs, knn_action, knn_joint),
+    }
+
+
+def ksg_estimator_with_distance_diagnostics(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
+    obs_rng, action_rng = jax.random.split(rng)
+    z_obs = obs_alg.predict(obs_state, batch, obs_rng)
+    z_action = action_alg.predict(action_state, batch, action_rng)
+
+    obs_dist = _l2_dists(z_obs)
+    action_dist = _l2_dists(z_action)
+
+    joint_dist = jnp.maximum(obs_dist, action_dist)
+    joint_knn_dists = jnp.sort(joint_dist, axis=-1)[:, ks]
+
+    obs_count = jnp.sum(obs_dist[:, :, None] < joint_knn_dists[:, None, :], axis=1)
+    action_count = jnp.sum(action_dist[:, :, None] < joint_knn_dists[:, None, :], axis=1)
+    score = -jnp.mean(digamma(obs_count) + digamma(action_count), axis=-1)
+
+    return score, _distance_diagnostic_stats(obs_dist, action_dist, joint_dist, ks)
+
+
 @dataclass
 class DatasetSpec:
     name: str
@@ -105,6 +157,14 @@ def parse_args():
         "--reference-score-pkl",
         default=None,
         help="Optional pickle with sample_score used only to define the clipping and normalization scale.",
+    )
+    parser.add_argument(
+        "--distance-diagnostics",
+        action="store_true",
+        help=(
+            "Save diagnostics for the L-infinity joint distance used by KSG, including how often "
+            "action-latent L2 distance is larger than observation-latent L2 distance."
+        ),
     )
     return parser.parse_args()
 
@@ -375,6 +435,50 @@ def normalize_scores(stats_array: np.ndarray, reference_scores: np.ndarray | Non
     return (clipped - np.mean(reference)) / std
 
 
+def merge_distance_diagnostics(total: Dict[str, float], batch_diag: Dict[str, np.ndarray]) -> Dict[str, float]:
+    for key, value in batch_diag.items():
+        value = float(np.asarray(value))
+        if key.endswith("_max"):
+            total[key] = max(total.get(key, float("-inf")), value)
+        else:
+            total[key] = total.get(key, 0.0) + value
+    return total
+
+
+def finalize_distance_diagnostics(total: Dict[str, float], ks: np.ndarray) -> Dict:
+    out = {
+        "ks": [int(k) for k in ks.tolist()],
+        "note": (
+            "KSG uses L-infinity over marginal latent L2 distances: "
+            "joint_distance(i,j)=max(obs_l2(i,j), action_l2(i,j)). "
+            "action_gt_obs_frac is the fraction where action_l2 > obs_l2, so action dominates the joint radius."
+        ),
+    }
+    for prefix in ("all_pairs", "joint_knn"):
+        count = total.get(f"{prefix}_count", 0.0)
+        if count <= 0:
+            out[prefix] = {"count": 0}
+            continue
+        action_gt = total.get(f"{prefix}_action_gt_obs_count", 0.0)
+        obs_gt = total.get(f"{prefix}_obs_gt_action_count", 0.0)
+        equal = total.get(f"{prefix}_equal_count", 0.0)
+        out[prefix] = {
+            "count": int(count),
+            "action_gt_obs_count": int(action_gt),
+            "obs_gt_action_count": int(obs_gt),
+            "equal_count": int(equal),
+            "action_gt_obs_frac": action_gt / count,
+            "obs_gt_action_frac": obs_gt / count,
+            "equal_frac": equal / count,
+            "mean_obs_l2": total.get(f"{prefix}_obs_l2_sum", 0.0) / count,
+            "mean_action_l2": total.get(f"{prefix}_action_l2_sum", 0.0) / count,
+            "mean_joint_linf": total.get(f"{prefix}_joint_linf_sum", 0.0) / count,
+            "max_joint_linf": total.get(f"{prefix}_joint_linf_max", float("nan")),
+            "mean_action_minus_obs_l2": total.get(f"{prefix}_action_minus_obs_sum", 0.0) / count,
+        }
+    return out
+
+
 def save_plots(ds_scores: Dict, out_dir: str, ds_name: str):
     if "quality_by_ep_idx" not in ds_scores:
         return
@@ -439,17 +543,31 @@ def main():
             f"but requested image keys {image_keys}."
         )
 
-    pred_fn = jax.jit(
-        lambda batch, rng: ksg_estimator(
-            batch,
-            rng,
-            ks=np.arange(5, 8),
-            obs_alg=obs_alg,
-            obs_state=obs_state,
-            action_alg=action_alg,
-            action_state=action_state,
+    ks = np.arange(5, 8)
+    if args.distance_diagnostics:
+        pred_fn = jax.jit(
+            lambda batch, rng: ksg_estimator_with_distance_diagnostics(
+                batch,
+                rng,
+                ks=ks,
+                obs_alg=obs_alg,
+                obs_state=obs_state,
+                action_alg=action_alg,
+                action_state=action_state,
+            )
         )
-    )
+    else:
+        pred_fn = jax.jit(
+            lambda batch, rng: ksg_estimator(
+                batch,
+                rng,
+                ks=ks,
+                obs_alg=obs_alg,
+                obs_state=obs_state,
+                action_alg=action_alg,
+                action_state=action_state,
+            )
+        )
 
     reference_scores = None
     if args.reference_score_pkl is not None:
@@ -475,35 +593,50 @@ def main():
 
         stats_list = []
         attrs = {k: [] for k in ("ep_idx", "step_idx", "quality_score", "dataset_id")}
+        distance_diag = {}
         rng = jax.random.key(0)
 
         for batch_index, batch in enumerate(stack_batches(episodes, args.batch_size, image_keys=image_keys)):
             rng = jax.random.fold_in(rng, batch_index)
             batch = jax.tree.map(jnp.asarray, batch)
-            pred = np.asarray(pred_fn(batch, rng))
+            if args.distance_diagnostics:
+                pred, batch_distance_diag = pred_fn(batch, rng)
+                distance_diag = merge_distance_diagnostics(distance_diag, batch_distance_diag)
+                pred = np.asarray(pred)
+            else:
+                pred = np.asarray(pred_fn(batch, rng))
             stats_list.append(pred)
             for key in attrs:
                 attrs[key].append(np.asarray(batch[key]))
 
         stats_array = np.concatenate(stats_list, axis=0)
         attrs = {k: np.concatenate(v, axis=0) for k, v in attrs.items()}
-        dataset_results.append((spec, stats_array, attrs))
+        finalized_distance_diag = (
+            finalize_distance_diagnostics(distance_diag, ks) if args.distance_diagnostics else None
+        )
+        dataset_results.append((spec, stats_array, attrs, finalized_distance_diag))
 
     if args.shared_normalization:
-        combined_stats = np.concatenate([stats_array for _, stats_array, _ in dataset_results], axis=0)
+        combined_stats = np.concatenate([stats_array for _, stats_array, _, _ in dataset_results], axis=0)
         normalized_by_name = {
             spec.name: normalize_scores(stats_array, reference_scores if reference_scores is not None else combined_stats)
-            for spec, stats_array, _ in dataset_results
+            for spec, stats_array, _, _ in dataset_results
         }
     else:
         normalized_by_name = {
             spec.name: normalize_scores(stats_array, reference_scores)
-            for spec, stats_array, _ in dataset_results
+            for spec, stats_array, _, _ in dataset_results
         }
 
-    for spec, raw_stats_array, attrs in dataset_results:
+    for spec, raw_stats_array, attrs, distance_diag in dataset_results:
         stats_array = normalized_by_name[spec.name]
         scores = aggregate_scores(stats_array, attrs, raw_stats_array=raw_stats_array)
+        if distance_diag is not None:
+            scores["distance_diagnostics"] = distance_diag
+            diag_path = os.path.join(args.output, spec.name + "_distance_diagnostics.json")
+            with open(diag_path, "w") as f:
+                json.dump(distance_diag, f, indent=2, sort_keys=True)
+            print(f"Wrote {diag_path}")
         with open(os.path.join(args.output, spec.name + ".pkl"), "wb") as f:
             pickle.dump(scores, f)
         save_plots(scores, args.output, spec.name)
