@@ -71,32 +71,33 @@ def ksg_estimator(batch, rng, ks, obs_alg, obs_state, action_alg, action_state):
 def _distance_diagnostic_stats(obs_dist, action_dist, joint_dist, ks):
     """Summarize which marginal dominates the L-infinity joint distance."""
     batch_size = obs_dist.shape[0]
-    off_diagonal = ~jnp.eye(batch_size, dtype=bool)
-
-    all_obs = obs_dist[off_diagonal]
-    all_action = action_dist[off_diagonal]
-    all_joint = joint_dist[off_diagonal]
+    off_diagonal = 1.0 - jnp.eye(batch_size, dtype=obs_dist.dtype)
 
     joint_order = jnp.argsort(joint_dist, axis=-1)[:, ks]
     knn_obs = jnp.take_along_axis(obs_dist, joint_order, axis=1).reshape(-1)
     knn_action = jnp.take_along_axis(action_dist, joint_order, axis=1).reshape(-1)
     knn_joint = jnp.take_along_axis(joint_dist, joint_order, axis=1).reshape(-1)
 
-    def summarize(prefix, obs_values, action_values, joint_values):
+    def summarize(prefix, obs_values, action_values, joint_values, mask=None):
+        if mask is None:
+            count = jnp.asarray(obs_values.size, dtype=jnp.float32)
+            mask = jnp.ones_like(obs_values, dtype=obs_values.dtype)
+        else:
+            count = jnp.sum(mask)
         return {
-            f"{prefix}_count": jnp.asarray(obs_values.size, dtype=jnp.float32),
-            f"{prefix}_action_gt_obs_count": jnp.sum(action_values > obs_values, dtype=jnp.float32),
-            f"{prefix}_obs_gt_action_count": jnp.sum(obs_values > action_values, dtype=jnp.float32),
-            f"{prefix}_equal_count": jnp.sum(action_values == obs_values, dtype=jnp.float32),
-            f"{prefix}_obs_l2_sum": jnp.sum(obs_values),
-            f"{prefix}_action_l2_sum": jnp.sum(action_values),
-            f"{prefix}_joint_linf_sum": jnp.sum(joint_values),
-            f"{prefix}_joint_linf_max": jnp.max(joint_values),
-            f"{prefix}_action_minus_obs_sum": jnp.sum(action_values - obs_values),
+            f"{prefix}_count": count,
+            f"{prefix}_action_gt_obs_count": jnp.sum((action_values > obs_values) * mask, dtype=jnp.float32),
+            f"{prefix}_obs_gt_action_count": jnp.sum((obs_values > action_values) * mask, dtype=jnp.float32),
+            f"{prefix}_equal_count": jnp.sum((action_values == obs_values) * mask, dtype=jnp.float32),
+            f"{prefix}_obs_l2_sum": jnp.sum(obs_values * mask),
+            f"{prefix}_action_l2_sum": jnp.sum(action_values * mask),
+            f"{prefix}_joint_linf_sum": jnp.sum(joint_values * mask),
+            f"{prefix}_joint_linf_max": jnp.max(jnp.where(mask > 0, joint_values, -jnp.inf)),
+            f"{prefix}_action_minus_obs_sum": jnp.sum((action_values - obs_values) * mask),
         }
 
     return {
-        **summarize("all_pairs", all_obs, all_action, all_joint),
+        **summarize("all_pairs", obs_dist, action_dist, joint_dist, off_diagonal),
         **summarize("joint_knn", knn_obs, knn_action, knn_joint),
     }
 
