@@ -3,8 +3,8 @@
 
 The score is transition-level negative log likelihood under the policy:
 
-* Transformer-GMM: -log p_continuous(a_t | s_t)
-* Transformer-discrete: -sum_j log p(bin(a_t[j]) | s_t)
+* GMM: -log p_continuous(a_t | s_t)
+* Discrete: -sum_j log p(bin(a_t[j]) | s_t)
 
 Outputs a pickle with sample-level scores and per-trajectory means.
 """
