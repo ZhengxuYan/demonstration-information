@@ -237,7 +237,11 @@ def patch_bc_algo():
             algo_class, algo_kwargs = BC_Gaussian, {}
     elif gmm_enabled:
 """
-    replace_once(BC_ALGO, old_branch, new_branch)
+    text = BC_ALGO.read_text()
+    if "    if discrete_enabled:\n" in text:
+        print(f"Already patched: {BC_ALGO}")
+    else:
+        replace_once(BC_ALGO, old_branch, new_branch)
 
     old_class = """
 class BC_Transformer_GMM(BC_Transformer):
