@@ -133,6 +133,75 @@ class TransformerGMMActorNetwork(TransformerActorNetwork):
     replace_once(POLICY_NETS, old, new)
 
 
+def patch_plain_policy_nets():
+    text = POLICY_NETS.read_text()
+    if "class DiscreteActorNetwork(ActorNetwork):" in text:
+        print(f"Already patched: {POLICY_NETS}")
+        return
+
+    if "\nclass TransformerDiscreteActorNetwork" in text:
+        marker = "\nclass TransformerDiscreteActorNetwork"
+    else:
+        marker = "\nclass TransformerGMMActorNetwork"
+
+    insert = """
+class DiscreteActorNetwork(ActorNetwork):
+    \"\"\"
+    Plain MLP policy that predicts categorical logits over uniform action bins
+    independently for each action dimension.
+    \"\"\"
+    def __init__(
+        self,
+        obs_shapes,
+        ac_dim,
+        mlp_layer_dims,
+        num_bins=64,
+        bin_type=\"uniform\",
+        goal_shapes=None,
+        encoder_kwargs=None,
+    ):
+        assert bin_type == \"uniform\", \"Only uniform action bins are currently supported\"
+        self.num_bins = num_bins
+        self.bin_type = bin_type
+        super(DiscreteActorNetwork, self).__init__(
+            obs_shapes=obs_shapes,
+            ac_dim=ac_dim,
+            mlp_layer_dims=mlp_layer_dims,
+            goal_shapes=goal_shapes,
+            encoder_kwargs=encoder_kwargs,
+        )
+
+    def _get_output_shapes(self):
+        return OrderedDict(logits=(self.ac_dim, self.num_bins))
+
+    def output_shape(self, input_shape=None):
+        return [self.ac_dim, self.num_bins]
+
+    def forward_train(self, obs_dict, goal_dict=None):
+        return MIMO_MLP.forward(self, obs=obs_dict, goal=goal_dict)[\"logits\"]
+
+    def forward(self, obs_dict, goal_dict=None):
+        logits = self.forward_train(obs_dict=obs_dict, goal_dict=goal_dict)
+        bins = torch.argmax(logits, dim=-1)
+        centers = torch.linspace(
+            -1.0 + 1.0 / self.num_bins,
+            1.0 - 1.0 / self.num_bins,
+            self.num_bins,
+            device=logits.device,
+            dtype=logits.dtype,
+        )
+        return centers[bins]
+
+    def _to_string(self):
+        return \"action_dim={}, num_bins={}, bin_type={}\".format(self.ac_dim, self.num_bins, self.bin_type)
+
+"""
+    if marker not in text:
+        raise RuntimeError(f"Expected policy-net insertion marker not found in {POLICY_NETS}")
+    POLICY_NETS.write_text(text.replace(marker, insert + marker, 1))
+    print(f"Patched: {POLICY_NETS}")
+
+
 def patch_bc_algo():
     old_factory = """    gmm_enabled = (\"gmm\" in algo_config and algo_config.gmm.enabled)
     vae_enabled = (\"vae\" in algo_config and algo_config.vae.enabled)
@@ -252,10 +321,100 @@ class BC_Transformer_GMM(BC_Transformer):
     replace_once(BC_ALGO, old_class, new_class)
 
 
+def patch_plain_bc_algo():
+    text = BC_ALGO.read_text()
+    old_branch = """    if discrete_enabled:
+        if rnn_enabled:
+            raise NotImplementedError
+        elif transformer_enabled:
+            algo_class, algo_kwargs = BC_Transformer_Discrete, {}
+        else:
+            raise NotImplementedError
+"""
+    new_branch = """    if discrete_enabled:
+        if rnn_enabled:
+            raise NotImplementedError
+        elif transformer_enabled:
+            algo_class, algo_kwargs = BC_Transformer_Discrete, {}
+        else:
+            algo_class, algo_kwargs = BC_Discrete, {}
+"""
+    if new_branch in text:
+        print(f"Already patched: {BC_ALGO}")
+    elif old_branch in text:
+        BC_ALGO.write_text(text.replace(old_branch, new_branch, 1))
+        print(f"Patched: {BC_ALGO}")
+    else:
+        raise RuntimeError(f"Expected discrete factory branch not found in {BC_ALGO}")
+
+    text = BC_ALGO.read_text()
+    if "class BC_Discrete(BC_Gaussian):" in text:
+        print(f"Already patched: {BC_ALGO}")
+        return
+
+    marker = "\nclass BC_Transformer_Discrete"
+    if marker not in text:
+        marker = "\nclass BC_Transformer_GMM"
+
+    insert = """
+class BC_Discrete(BC_Gaussian):
+    \"\"\"
+    Plain BC training with a categorical policy over uniform action bins.
+    \"\"\"
+    def _create_networks(self):
+        assert self.algo_config.discrete.enabled
+
+        self.nets = nn.ModuleDict()
+        self.nets[\"policy\"] = PolicyNets.DiscreteActorNetwork(
+            obs_shapes=self.obs_shapes,
+            goal_shapes=self.goal_shapes,
+            ac_dim=self.ac_dim,
+            mlp_layer_dims=self.algo_config.actor_layer_dims,
+            num_bins=self.algo_config.discrete.num_bins,
+            bin_type=self.algo_config.discrete.bin_type,
+            encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
+        )
+        self.nets = self.nets.float().to(self.device)
+
+    def _actions_to_bins(self, actions):
+        num_bins = self.algo_config.discrete.num_bins
+        clipped = torch.clamp(actions, -1.0, 1.0 - 1e-6)
+        bins = torch.floor((clipped + 1.0) * 0.5 * num_bins).long()
+        return torch.clamp(bins, 0, num_bins - 1)
+
+    def _forward_training(self, batch):
+        logits = self.nets[\"policy\"].forward_train(
+            obs_dict=batch[\"obs\"],
+            goal_dict=batch[\"goal_obs\"],
+        )
+        target_bins = self._actions_to_bins(batch[\"actions\"])
+        ce = F.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]),
+            target_bins.reshape(-1),
+            reduction=\"none\",
+        ).reshape(target_bins.shape)
+        nll = ce.sum(dim=-1)
+
+        return OrderedDict(
+            logits=logits,
+            target_bins=target_bins,
+            log_probs=-nll,
+        )
+
+
+"""
+    if marker not in text:
+        raise RuntimeError(f"Expected BC insertion marker not found in {BC_ALGO}")
+    BC_ALGO.write_text(text.replace(marker, insert + marker, 1))
+    print(f"Patched: {BC_ALGO}")
+
+
 def main():
     patch_config()
     patch_policy_nets()
     patch_bc_algo()
+    patch_plain_policy_nets()
+    patch_plain_bc_algo()
 
 
 if __name__ == "__main__":
