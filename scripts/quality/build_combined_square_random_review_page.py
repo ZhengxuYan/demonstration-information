@@ -71,6 +71,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mh-fps", type=int, default=20, help="FPS for Square MH videos exported from HDF5.")
     parser.add_argument(
+        "--mh-label-only-per-label",
+        type=int,
+        default=0,
+        help=(
+            "Add this many uncategorized Square MH demos for each suboptimal quality label 1.0 and 2.0. "
+            "Demos are selected across wrist-score quantiles and shown without full/partial obs labels."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -118,7 +127,11 @@ def load_score_bundle(path: Path, max_trace_points: int) -> dict[str, object]:
             "scores": [round(float(v), 5) for v in ds_scores],
         }
 
-    return {"ep_scores": ep_scores, "traces": traces}
+    quality_by_ep_idx = {
+        int(k): float(v) for k, v in data.get("quality_by_ep_idx", {}).items()
+    }
+
+    return {"ep_scores": ep_scores, "traces": traces, "quality_by_ep_idx": quality_by_ep_idx}
 
 
 def load_scores(scores_root: Path, max_trace_points: int) -> dict[str, dict[str, dict[str, object]]]:
@@ -175,6 +188,52 @@ def parse_manual_video(path: Path, share_root: Path) -> dict[str, object]:
         "old_score": None,
         "label": None,
     }
+
+
+def make_mh_label_only_row(ep_idx: int, label: float) -> dict[str, object]:
+    label_text = f"{label:g}".replace(".", "_")
+    return {
+        "category": f"mh_label_{label_text}",
+        "dataset": "square_mh",
+        "ep_idx": ep_idx,
+        "title": f"MH demo_{ep_idx:04d}",
+        "video": None,
+        "wrist_video": None,
+        "agent_video": None,
+        "old_score": None,
+        "label": label,
+    }
+
+
+def select_label_only_mh_rows(
+    scores: dict[str, dict[str, dict[str, object]]],
+    exclude_ep_indices: set[int],
+    per_label: int,
+) -> list[dict[str, object]]:
+    if per_label <= 0:
+        return []
+
+    wrist_square = scores["wrist"]["square_mh"]
+    labels = wrist_square.get("quality_by_ep_idx", {})  # type: ignore[assignment]
+    ep_scores = wrist_square["ep_scores"]  # type: ignore[index]
+    rows: list[dict[str, object]] = []
+    for label in (1.0, 2.0):
+        candidates = [
+            (int(ep_idx), float(ep_scores[int(ep_idx)]))
+            for ep_idx, ep_label in labels.items()  # type: ignore[union-attr]
+            if float(ep_label) == label and int(ep_idx) not in exclude_ep_indices and int(ep_idx) in ep_scores
+        ]
+        candidates.sort(key=lambda item: item[1])
+        if not candidates:
+            continue
+        if len(candidates) <= per_label:
+            selected = candidates
+        else:
+            indices = np.linspace(0, len(candidates) - 1, per_label).round().astype(int).tolist()
+            selected = [candidates[idx] for idx in dict.fromkeys(indices)]
+        for ep_idx, _ in selected:
+            rows.append(make_mh_label_only_row(ep_idx, label))
+    return rows
 
 
 def write_video(video_path: Path, frames: np.ndarray, fps: int) -> int:
@@ -341,6 +400,7 @@ def collect_rows(
     manual_video_root: Path,
     scores: dict[str, dict[str, dict[str, object]]],
     mh_only_both_scores: dict[str, object] | None = None,
+    mh_label_only_rows: list[dict[str, object]] | None = None,
     manual_agent_video_root: Path | None = None,
     manual_paired_video_root: Path | None = None,
     mh_agent_video_root: Path | None = None,
@@ -359,6 +419,18 @@ def collect_rows(
                 if paired_video.exists():
                     row["paired_video"] = paired_video.relative_to(share_root).as_posix()
             rows.append(attach_scores(row, scores, mh_only_both_scores=mh_only_both_scores))
+
+    for row in mh_label_only_rows or []:
+        row = dict(row)
+        if mh_agent_video_root is not None:
+            agent_video = mh_agent_video_root / f"demo_{int(row['ep_idx']):04d}.mp4"
+            if agent_video.exists():
+                row["agent_video"] = agent_video.relative_to(share_root).as_posix()
+        if mh_paired_video_root is not None:
+            paired_video = mh_paired_video_root / f"demo_{int(row['ep_idx']):04d}.mp4"
+            if paired_video.exists():
+                row["paired_video"] = paired_video.relative_to(share_root).as_posix()
+        rows.append(attach_scores(row, scores, mh_only_both_scores=mh_only_both_scores))
 
     for path in sorted(manual_video_root.glob("demo_*.mp4"), key=lambda p: int(p.stem.split("_")[1])):
         row = parse_manual_video(path, share_root)
@@ -547,8 +619,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
   <header>
     <h1>Combined Square DemInf Review</h1>
     <p class="lede">
-      Three categories are shown: Square MH demos where the wrist view fully observes the opening,
-      Square MH demos where it is partially occluded, and the manually collected random-init demos.
+      The page includes manually grouped Square MH full/partial-observation examples,
+      label-only Square MH suboptimal examples, and manually collected random-init demos.
       Each card shows transition-level DemInf score traces for wrist-only, third-person-only,
       and fused wrist+third-person checkpoints. Square MH cards also include the MH-only fused checkpoint.
     </p>
@@ -556,6 +628,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
       <button class="filter active" data-category="all">All</button>
       <button class="filter" data-category="obs_full">MH obs_full</button>
       <button class="filter" data-category="obs_partial">MH obs_partial</button>
+      <button class="filter" data-category="mh_label_1">MH label 1</button>
+      <button class="filter" data-category="mh_label_2">MH label 2</button>
       <button class="filter" data-category="manual_collected">Collected</button>
       <select id="sort">
         <option value="category">Sort by category</option>
@@ -593,6 +667,8 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
     const categoryNames = {{
       obs_full: 'MH obs_full',
       obs_partial: 'MH obs_partial',
+      mh_label_1: 'MH label 1, uncategorized',
+      mh_label_2: 'MH label 2, uncategorized',
       manual_collected: 'Collected random-init'
     }};
 
@@ -878,6 +954,13 @@ def build_html(rows: list[dict[str, object]], summaries: dict[str, dict[str, obj
 def main() -> None:
     args = parse_args()
     output = args.output or args.share_root / "combined_scores.html"
+    scores = load_scores(args.scores_root, args.max_trace_points)
+    mh_only_both_scores = None
+    if args.mh_only_both_scores_root is not None:
+        mh_only_path = args.mh_only_both_scores_root / "both" / "square_mh.pkl"
+        if mh_only_path.exists():
+            mh_only_both_scores = load_score_bundle(mh_only_path, args.max_trace_points)
+
     manual_video_root = args.manual_video_root
     manual_agent_video_root = None
     manual_paired_video_root = None
@@ -926,11 +1009,19 @@ def main() -> None:
     if mh_hdf5 is None:
         candidate = args.share_root.parent / "image.hdf5"
         mh_hdf5 = candidate if candidate.exists() else None
+
+    categorized_mh_eps = set()
+    for category in ("obs_full", "obs_partial"):
+        for path in sorted((args.share_root / category).glob("*.mp4")):
+            categorized_mh_eps.add(int(path.stem.split("_")[1]))
+    mh_label_only_rows = select_label_only_mh_rows(
+        scores,
+        exclude_ep_indices=categorized_mh_eps,
+        per_label=args.mh_label_only_per_label,
+    )
+
     if mh_hdf5 is not None:
-        selected_mh_eps = []
-        for category in ("obs_full", "obs_partial"):
-            for path in sorted((args.share_root / category).glob("*.mp4")):
-                selected_mh_eps.append(int(path.stem.split("_")[1]))
+        selected_mh_eps = sorted(categorized_mh_eps | {int(row["ep_idx"]) for row in mh_label_only_rows})
         mh_agent_video_root = export_hdf5_camera_videos(
             hdf5_path=mh_hdf5,
             share_root=args.share_root,
@@ -956,23 +1047,19 @@ def main() -> None:
         if existing_paired.exists():
             mh_paired_video_root = existing_paired
 
-    scores = load_scores(args.scores_root, args.max_trace_points)
-    mh_only_both_scores = None
-    if args.mh_only_both_scores_root is not None:
-        mh_only_path = args.mh_only_both_scores_root / "both" / "square_mh.pkl"
-        if mh_only_path.exists():
-            mh_only_both_scores = load_score_bundle(mh_only_path, args.max_trace_points)
     rows = collect_rows(
         args.share_root,
         manual_video_root,
         scores,
         mh_only_both_scores=mh_only_both_scores,
+        mh_label_only_rows=mh_label_only_rows,
         manual_agent_video_root=manual_agent_video_root,
         manual_paired_video_root=manual_paired_video_root,
         mh_agent_video_root=mh_agent_video_root,
         mh_paired_video_root=mh_paired_video_root,
     )
-    summaries = {category: summarize(rows, category) for category in ("obs_full", "obs_partial", "manual_collected")}
+    summary_categories = ("obs_full", "obs_partial", "mh_label_1", "mh_label_2", "manual_collected")
+    summaries = {category: summarize(rows, category) for category in summary_categories}
     output.write_text(build_html(rows, summaries), encoding="utf-8")
     print(f"Wrote {output}")
     print(f"Rows: {len(rows)}")

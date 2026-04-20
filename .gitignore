@@ -186,3 +186,5 @@ square_mh_wrist_agent_paired_medium_deploy/
 vae_export/
 robomimic_policy_nll_review/
 robomimic_policy_scores/
+distance_diagnostics/
+square_mh_wrist_agent_paired_labels_medium_deploy/
