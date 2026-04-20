@@ -16,6 +16,7 @@ python scripts/train.py \
     --name combined_wrist
 
 Use camera=both to train one fused observation VAE over both agent and wrist images.
+Use type=i to train an image-only observation VAE without robot proprio.
 """
 
 import optax
@@ -101,7 +102,7 @@ def get_config(config_str="square/mh,sa,1"):
             "Expected config string env,type[,seed[,camera[,dataset_path]]], "
             f"for example square/mh,s,1,wrist. Got: {config_str}"
         )
-    assert config_type in {"s", "a", "sa"}
+    assert config_type in {"i", "s", "a", "sa"}
     assert camera in {"wrist", "agent", "both"}
 
     cameras = ("agent", "wrist") if camera == "both" else (camera,)
@@ -113,6 +114,7 @@ def get_config(config_str="square/mh,sa,1"):
     image_weights = {key: 1 / 200 for key in image_keys}
 
     encoder_keys = {
+        "i": image_encoders,
         "s": {"observation->state": None, **image_encoders},
         "a": {"action": None},
         "sa": {
@@ -123,6 +125,7 @@ def get_config(config_str="square/mh,sa,1"):
     }[config_type]
 
     decoder_keys = {
+        "i": image_decoders,
         "s": {"observation->state": None, **image_decoders},
         "a": {"action": None},
         "sa": {
@@ -134,27 +137,35 @@ def get_config(config_str="square/mh,sa,1"):
     seed = int(seed)
 
     z_dim = {
+        "i": 16,
         "s": 16,  # XYZ+ROT=6 + Object XYZ + Rot=6 + Gripper=1 -- Total 13
         "a": 6,  # XYZ+ROT=6
         "sa": 22,
     }[config_type]
 
     weights = {
+        "i": image_weights,
         "s": {"observation->state": 1.0, **image_weights},
         "a": {"action": 1.0},
         "sa": {"observation->state": 1.0, **image_weights, "action": 1.0},
     }[config_type]
 
     # Define the structure
-    structure = {
-        "observation": {
+    observation_structure = {
+        "image": {key: (84, 84) for key in cameras},
+    }
+    if config_type in {"s", "sa"}:
+        observation_structure = {
             "state": {
                 StateEncoding.EE_POS: NormalizationType.GAUSSIAN,
                 StateEncoding.EE_QUAT: NormalizationType.GAUSSIAN,
                 StateEncoding.GRIPPER: NormalizationType.GAUSSIAN,
             },
-            "image": {key: (84, 84) for key in cameras},
-        },
+            **observation_structure,
+        }
+
+    structure = {
+        "observation": observation_structure,
         "action": {
             "desired_delta": {
                 StateEncoding.EE_POS: NormalizationType.GAUSSIAN,
