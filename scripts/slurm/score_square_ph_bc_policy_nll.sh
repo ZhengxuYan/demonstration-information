@@ -20,8 +20,8 @@ REPO=/iris/u/jasonyan/repos/demonstration-information
 DATASET=/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5
 OUT_DIR=/iris/u/jasonyan/data/robomimic_policy_scores/square_ph_bc_wrist_proprio
 
-GMM_CKPT=/iris/u/jasonyan/data/robomimic_outputs/square_ph_bc_gmm_wrist_proprio_seed1/20260420001214/models/model_epoch_200.pth
-DISCRETE_CKPT=/iris/u/jasonyan/data/robomimic_outputs/square_ph_bc_discrete_wrist_proprio_seed1/20260420001214/models/model_epoch_200.pth
+GMM_CKPT=/iris/u/jasonyan/data/robomimic_outputs/square_ph_bc_gmm_wrist_proprio_seed1_v2/20260420182629/models/model_epoch_2000.pth
+DISCRETE_CKPT=/iris/u/jasonyan/data/robomimic_outputs/square_ph_bc_discrete_wrist_proprio_seed1_v2/20260420182629/models/model_epoch_2000.pth
 
 mkdir -p /iris/u/jasonyan/slurm "${OUT_DIR}"
 
@@ -39,12 +39,12 @@ python scripts/quality/score_robomimic_policy_nll.py \
   --checkpoint "${GMM_CKPT}" \
   --dataset "${DATASET}" \
   --output "${OUT_DIR}" \
-  --name gmm_bc_epoch_200 \
+  --name gmm_bc_epoch_2000_v2 \
   --batch-size 128
 
 python scripts/quality/score_robomimic_policy_nll.py \
   --checkpoint "${DISCRETE_CKPT}" \
   --dataset "${DATASET}" \
   --output "${OUT_DIR}" \
-  --name discrete_bc_epoch_200 \
+  --name discrete_bc_epoch_2000_v2 \
   --batch-size 128
