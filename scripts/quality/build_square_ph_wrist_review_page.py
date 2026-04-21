@@ -153,16 +153,19 @@ def write_video(video_path: Path, frames: np.ndarray, fps: int) -> None:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
 
 
-def export_videos(hdf5_path: Path, output_dir: Path, ep_indices: list[int], fps: int) -> dict[int, str]:
-    rel_paths = {}
+def export_videos(hdf5_path: Path, output_dir: Path, ep_indices: list[int], fps: int) -> dict[int, dict[str, object]]:
+    assets = {}
     with h5py.File(hdf5_path, "r") as f:
         for ep_idx in ep_indices:
             demo = f"demo_{ep_idx}"
             frames = f["data"][demo]["obs"][WRIST_KEY][:]
             rel = Path("videos") / f"demo_{ep_idx:04d}.mp4"
             write_video(output_dir / rel, frames, fps)
-            rel_paths[ep_idx] = rel.as_posix()
-    return rel_paths
+            assets[ep_idx] = {
+                "video": rel.as_posix(),
+                "num_frames": int(len(frames)),
+            }
+    return assets
 
 
 def maybe_copy_plot(src: Path, dst: Path) -> str | None:
@@ -176,8 +179,7 @@ def maybe_copy_plot(src: Path, dst: Path) -> str | None:
 def build_html(
     output_dir: Path,
     scores: dict[str, dict[str, object]],
-    videos: dict[int, str],
-    plots: dict[str, dict[str, str | None]],
+    videos: dict[int, dict[str, object]],
 ) -> None:
     rows = []
     image_scores = scores["image_only"]["ep_scores"]
@@ -192,7 +194,8 @@ def build_html(
         rows.append(
             {
                 "ep_idx": ep_idx,
-                "video": videos[ep_idx],
+                "video": videos[ep_idx]["video"],
+                "num_frames": videos[ep_idx]["num_frames"],
                 "image_score": image_score,
                 "proprio_score": proprio_score,
                 "gap": gap,
@@ -202,10 +205,7 @@ def build_html(
             }
         )
 
-    payload = {
-        "rows": rows,
-        "plots": plots,
-    }
+    payload = {"rows": rows}
     payload_json = json.dumps(payload)
 
     html_doc = f"""<!doctype html>
@@ -247,7 +247,7 @@ def build_html(
     h1 {{ margin: 0 0 8px; font-size: clamp(25px, 3vw, 36px); letter-spacing: -.03em; }}
     .lede {{ margin: 0; max-width: 1100px; color: var(--muted); line-height: 1.45; }}
     .toolbar {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }}
-    button, select {{
+    button, select, input {{
       border: 1px solid var(--border);
       background: var(--panel);
       color: var(--ink);
@@ -257,8 +257,13 @@ def build_html(
       box-shadow: 0 4px 14px var(--shadow);
     }}
     button.active {{ background: var(--ink); color: var(--panel); }}
-    main {{ padding: 22px 24px 34px; display: grid; gap: 22px; }}
-    .plots, .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }}
+    main {{ padding: 22px 24px 34px; display: grid; gap: 24px; }}
+    .summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }}
+    .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }}
     .card {{
       background: rgba(255, 250, 240, .95);
       border: 1px solid var(--border);
@@ -266,12 +271,42 @@ def build_html(
       box-shadow: 0 12px 32px var(--shadow);
       overflow: hidden;
     }}
-    .card-body {{ padding: 14px 16px 16px; }}
-    .plot-card {{ padding: 14px; }}
-    .plot-card img {{ width: 100%; display: block; border-radius: 12px; border: 1px solid var(--border); }}
-    video {{ width: 100%; display: block; background: #111; image-rendering: pixelated; }}
+    .summary-card {{ padding: 14px 16px; background: rgba(255, 250, 240, .95); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 12px 32px var(--shadow); }}
+    .summary-card h2 {{ margin: 0 0 8px; font-size: 18px; }}
+    .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }}
+    .video-panel {{ position: relative; background: #050403; }}
+    .video-panel span {{
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      z-index: 1;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(5, 4, 3, .68);
+      color: #fffaf0;
+      font-size: 12px;
+      letter-spacing: .03em;
+    }}
+    video {{ display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #050403; image-rendering: pixelated; }}
+    .plot {{ padding: 12px 14px 8px; border-top: 1px solid var(--border); background: linear-gradient(180deg, rgba(15,109,103,.04), transparent); }}
+    svg {{ width: 100%; height: 126px; overflow: visible; display: block; }}
+    .gridline {{ stroke: rgba(29,26,22,.12); stroke-width: 1; stroke-dasharray: 4 4; }}
+    .zero {{ stroke: rgba(29,26,22,.35); stroke-width: 1.2; }}
+    .axis-label {{ fill: var(--muted); font-size: 10px; }}
+    .line {{ fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }}
+    .image-line {{ stroke: var(--image); }}
+    .proprio-line {{ stroke: var(--proprio); }}
+    .playhead {{ stroke: #16120e; stroke-width: 2; opacity: .78; }}
+    .legend {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; color: var(--muted); font-size: 12px; }}
+    .swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 5px; }}
+    .swatch.image {{ background: var(--image); }}
+    .swatch.proprio {{ background: var(--proprio); }}
+    .body {{ padding: 12px 14px 15px; display: grid; gap: 9px; }}
+    .title {{ display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }}
+    .title strong {{ font-size: 17px; }}
+    .pill {{ border-radius: 999px; background: #ddeee8; padding: 4px 8px; color: #17433f; font-size: 12px; white-space: nowrap; }}
     h2, h3 {{ margin: 0; }}
-    .meta {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }}
+    .meta {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
     .metric {{
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -280,11 +315,14 @@ def build_html(
     }}
     .metric span {{ display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .055em; }}
     .metric strong {{ font-size: 18px; }}
-    canvas {{ width: 100%; height: 120px; border: 1px solid var(--border); border-radius: 12px; background: #fffdf6; }}
-    .legend {{ display: flex; gap: 12px; color: var(--muted); font-size: 13px; margin-top: 8px; }}
-    .swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 4px; }}
-    .image {{ background: var(--image); }}
-    .proprio {{ background: var(--proprio); }}
+    .image-score {{ color: var(--image); }}
+    .proprio-score {{ color: var(--proprio); }}
+    .path {{ color: var(--muted); font-size: 12px; word-break: break-all; }}
+    @media (max-width: 700px) {{
+      header, main {{ padding-left: 14px; padding-right: 14px; }}
+      .cards {{ grid-template-columns: 1fr; }}
+      .summary-grid, .meta {{ grid-template-columns: repeat(2, 1fr); }}
+    }}
   </style>
 </head>
 <body>
@@ -292,121 +330,209 @@ def build_html(
     <h1>Square PH Wrist DemInf Review</h1>
     <p class="lede">Compares MI scores from a wrist-image-only observation VAE against a wrist-image + robot-proprio observation VAE. Videos are exported from the Square PH HDF5 wrist camera.</p>
     <div class="toolbar">
-      <button class="active" data-sort="gap_abs">Sort by |proprio - image|</button>
-      <button data-sort="image_score">Sort image-only</button>
-      <button data-sort="proprio_score">Sort image+proprio</button>
-      <button data-sort="ep_idx">Sort demo id</button>
+      <select id="sort">
+        <option value="gap_abs">Sort by |proprio - image|</option>
+        <option value="image_score">Sort image-only</option>
+        <option value="proprio_score">Sort image+proprio</option>
+        <option value="gap">Sort gap</option>
+        <option value="demo">Sort demo id</option>
+      </select>
+      <label>smooth window <input id="smooth-window" type="number" min="1" max="101" step="2" value="9"></label>
+      <input id="search" placeholder="Filter demo id">
     </div>
   </header>
   <main>
-    <section class="plots" id="plots"></section>
-    <section class="grid" id="grid"></section>
+    <section class="summary" id="summary"></section>
+    <section>
+      <div class="cards" id="cards"></div>
+    </section>
   </main>
   <script>
     const DATA = {payload_json};
-    const grid = document.getElementById('grid');
-    const plots = document.getElementById('plots');
-    let currentSort = 'gap_abs';
+    const cards = document.getElementById('cards');
 
     function fmt(x) {{
       return Number.isFinite(x) ? x.toFixed(3) : 'n/a';
     }}
 
-    function renderPlots() {{
-      const labels = {{
-        image_only: 'Wrist image only',
-        image_proprio: 'Wrist image + proprio'
-      }};
-      plots.innerHTML = Object.entries(DATA.plots).map(([method, files]) => `
-        <article class="card plot-card">
-          <h2>${{labels[method]}}</h2>
-          ${{files.curve ? `<img src="${{method}}/${{files.curve}}" alt="${{method}} curve">` : ''}}
-          ${{files.hist ? `<img src="${{method}}/${{files.hist}}" alt="${{method}} histogram">` : ''}}
-        </article>
-      `).join('');
+    function statBlock(label, values) {{
+      const mean = values.length ? values.reduce((a, b) => a + b, 0) / values.length : NaN;
+      return `<div class="metric"><span>${{label}}</span><strong>${{fmt(mean)}}</strong></div>`;
     }}
 
-    function drawTrace(canvas, imageTrace, proprioTrace) {{
-      const ctx = canvas.getContext('2d');
-      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
-      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
-      ctx.scale(devicePixelRatio, devicePixelRatio);
-      const cw = canvas.clientWidth;
-      const ch = canvas.clientHeight;
-      ctx.clearRect(0, 0, cw, ch);
-      const traces = [imageTrace, proprioTrace].filter(t => t && t.steps && t.steps.length);
-      if (!traces.length) return;
-      const xs = traces.flatMap(t => t.steps);
-      const ys = traces.flatMap(t => t.scores);
-      const minX = Math.min(...xs), maxX = Math.max(...xs);
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
-      const pad = 12;
-      function px(x) {{ return pad + (x - minX) / Math.max(1, maxX - minX) * (cw - 2 * pad); }}
-      function py(y) {{ return ch - pad - (y - minY) / Math.max(1e-6, maxY - minY) * (ch - 2 * pad); }}
-      ctx.strokeStyle = '#d7cbbb';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(pad, ch - pad);
-      ctx.lineTo(cw - pad, ch - pad);
-      ctx.stroke();
-      for (const [trace, color] of [[imageTrace, '#0f6d67'], [proprioTrace, '#b54a2a']]) {{
-        if (!trace || !trace.steps || !trace.steps.length) continue;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        trace.steps.forEach((x, i) => {{
-          const y = trace.scores[i];
-          if (i === 0) ctx.moveTo(px(x), py(y));
-          else ctx.lineTo(px(x), py(y));
-        }});
-        ctx.stroke();
+    function renderSummary(rows) {{
+      document.getElementById('summary').innerHTML = `
+        <article class="summary-card">
+          <h2>Visible demos</h2>
+          <div class="summary-grid">
+            <div class="metric"><span>count</span><strong>${{rows.length}}</strong></div>
+            ${{statBlock('image mean', rows.map(r => r.image_score))}}
+            ${{statBlock('proprio mean', rows.map(r => r.proprio_score))}}
+            ${{statBlock('gap mean', rows.map(r => r.gap))}}
+          </div>
+        </article>`;
+    }}
+
+    function pathFromTrace(trace, xMin, xMax, yMin, yMax) {{
+      if (!trace || !trace.steps || trace.steps.length === 0) return '';
+      const left = 36, right = 344, top = 12, bottom = 108;
+      const xSpan = Math.max(1, xMax - xMin);
+      const ySpan = Math.max(1e-6, yMax - yMin);
+      return trace.steps.map((step, i) => {{
+        const x = left + ((step - xMin) / xSpan) * (right - left);
+        const y = bottom - ((trace.scores[i] - yMin) / ySpan) * (bottom - top);
+        return `${{i === 0 ? 'M' : 'L'}} ${{x.toFixed(2)}} ${{y.toFixed(2)}}`;
+      }}).join(' ');
+    }}
+
+    function smoothingWindow() {{
+      const raw = Number(document.getElementById('smooth-window').value);
+      if (!Number.isFinite(raw) || raw <= 1) return 1;
+      return Math.max(1, Math.floor(raw));
+    }}
+
+    function smoothTrace(trace, window) {{
+      if (!trace || !trace.scores || trace.scores.length <= 2 || window <= 1) return trace;
+      const half = Math.floor(window / 2);
+      const scores = trace.scores.map((_, idx) => {{
+        const start = Math.max(0, idx - half);
+        const end = Math.min(trace.scores.length, idx + half + 1);
+        let total = 0;
+        for (let i = start; i < end; i++) total += trace.scores[i];
+        return total / (end - start);
+      }});
+      return {{steps: trace.steps, scores}};
+    }}
+
+    function slopePer100(trace) {{
+      if (!trace || trace.steps.length < 2) return null;
+      const n = trace.steps.length;
+      const meanX = trace.steps.reduce((a, b) => a + b, 0) / n;
+      const meanY = trace.scores.reduce((a, b) => a + b, 0) / n;
+      let num = 0, den = 0;
+      for (let i = 0; i < n; i++) {{
+        const dx = trace.steps[i] - meanX;
+        num += dx * (trace.scores[i] - meanY);
+        den += dx * dx;
+      }}
+      return den <= 0 ? null : (num / den) * 100;
+    }}
+
+    function traceSvg(row) {{
+      const window = smoothingWindow();
+      const imageTrace = smoothTrace(row.image_trace, window);
+      const proprioTrace = smoothTrace(row.proprio_trace, window);
+      const traces = [imageTrace, proprioTrace].filter(Boolean);
+      if (traces.length === 0) return '<div class="plot">No transition trace available.</div>';
+      const allSteps = traces.flatMap(t => t.steps);
+      const allScores = traces.flatMap(t => t.scores);
+      const xMin = 0, xMax = Math.max(row.num_frames - 1, ...allSteps, 1);
+      let yMin = Math.min(...allScores), yMax = Math.max(...allScores);
+      if (yMin === yMax) {{ yMin -= 0.1; yMax += 0.1; }}
+      const zeroY = 108 - ((0 - yMin) / Math.max(1e-6, yMax - yMin)) * (108 - 12);
+      const showZero = zeroY >= 12 && zeroY <= 108;
+      return `
+        <div class="plot">
+          <svg viewBox="0 0 380 126" preserveAspectRatio="none" aria-label="transition score traces">
+            <line class="gridline" x1="36" y1="12" x2="344" y2="12"></line>
+            <line class="gridline" x1="36" y1="60" x2="344" y2="60"></line>
+            <line class="gridline" x1="36" y1="108" x2="344" y2="108"></line>
+            ${{showZero ? `<line class="zero" x1="36" y1="${{zeroY.toFixed(2)}}" x2="344" y2="${{zeroY.toFixed(2)}}"></line>` : ''}}
+            <text class="axis-label" x="4" y="16">${{fmt(yMax, 2)}}</text>
+            <text class="axis-label" x="4" y="112">${{fmt(yMin, 2)}}</text>
+            <path class="line image-line" d="${{pathFromTrace(imageTrace, xMin, xMax, yMin, yMax)}}"></path>
+            <path class="line proprio-line" d="${{pathFromTrace(proprioTrace, xMin, xMax, yMin, yMax)}}"></path>
+            <line class="playhead" x1="36" y1="8" x2="36" y2="112"></line>
+          </svg>
+          <div class="legend">
+            <span><span class="swatch image"></span>image only, slope/100: <strong>${{fmt(slopePer100(imageTrace), 3)}}</strong></span>
+            <span><span class="swatch proprio"></span>image + proprio, slope/100: <strong>${{fmt(slopePer100(proprioTrace), 3)}}</strong></span>
+          </div>
+        </div>`;
+    }}
+
+    function card(row) {{
+      return `
+        <article class="card" data-demo="${{row.ep_idx}}">
+          <div class="video-panel">
+            <span>wrist view</span>
+            <video controls preload="metadata" src="${{row.video}}" data-role="wrist"></video>
+          </div>
+          ${{traceSvg(row)}}
+          <div class="body">
+            <div class="title"><strong>demo_${{String(row.ep_idx).padStart(4, '0')}}</strong><span class="pill">Square PH</span></div>
+            <div class="meta">
+              <div class="metric"><span>image only</span><strong class="image-score">${{fmt(row.image_score)}}</strong></div>
+              <div class="metric"><span>image + proprio</span><strong class="proprio-score">${{fmt(row.proprio_score)}}</strong></div>
+              <div class="metric"><span>gap</span><strong>${{fmt(row.gap)}}</strong></div>
+              <div class="metric"><span>label</span><strong>${{row.label ?? 'n/a'}}</strong></div>
+              <div class="metric"><span>frames</span><strong>${{row.num_frames}}</strong></div>
+              <div class="metric"><span>dataset ep</span><strong>${{row.ep_idx}}</strong></div>
+            </div>
+            <div class="path">wrist: ${{row.video}}</div>
+          </div>
+        </article>`;
+    }}
+
+    function sortedRows(rows) {{
+      const rows = [...DATA.rows];
+      const mode = document.getElementById('sort').value;
+      const query = document.getElementById('search').value.toLowerCase().trim();
+      let copy = [...rows];
+      if (query) copy = copy.filter(row => `${{row.ep_idx}}`.includes(query));
+      if (mode === 'image_score') copy.sort((a, b) => b.image_score - a.image_score);
+      else if (mode === 'proprio_score') copy.sort((a, b) => b.proprio_score - a.proprio_score);
+      else if (mode === 'gap') copy.sort((a, b) => b.gap - a.gap);
+      else if (mode === 'demo') copy.sort((a, b) => a.ep_idx - b.ep_idx);
+      else copy.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+      return copy;
+    }}
+
+    function updatePlayhead(cardEl) {{
+      const video = cardEl.querySelector('video[data-role="wrist"]') || cardEl.querySelector('video');
+      const playhead = cardEl.querySelector('.playhead');
+      if (!video || !playhead) return;
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+      const progress = duration ? Math.min(1, Math.max(0, video.currentTime / duration)) : 0;
+      const x = 36 + progress * (344 - 36);
+      playhead.setAttribute('x1', x.toFixed(2));
+      playhead.setAttribute('x2', x.toFixed(2));
+    }}
+
+    function syncLoop(video, cardEl) {{
+      updatePlayhead(cardEl);
+      if (!video.paused && !video.ended) {{
+        if (video.requestVideoFrameCallback) {{
+          video.requestVideoFrameCallback(() => syncLoop(video, cardEl));
+        }} else {{
+          requestAnimationFrame(() => syncLoop(video, cardEl));
+        }}
       }}
     }}
 
-    function sortedRows() {{
-      const rows = [...DATA.rows];
-      rows.sort((a, b) => {{
-        if (currentSort === 'gap_abs') return Math.abs(b.gap) - Math.abs(a.gap);
-        return a[currentSort] - b[currentSort];
+    function attachVideoSync() {{
+      document.querySelectorAll('.card').forEach(cardEl => {{
+        const video = cardEl.querySelector('video[data-role="wrist"]') || cardEl.querySelector('video');
+        if (!video) return;
+        video.addEventListener('loadedmetadata', () => updatePlayhead(cardEl));
+        video.addEventListener('play', () => syncLoop(video, cardEl));
+        video.addEventListener('pause', () => updatePlayhead(cardEl));
+        video.addEventListener('seeked', () => updatePlayhead(cardEl));
+        video.addEventListener('timeupdate', () => updatePlayhead(cardEl));
+        updatePlayhead(cardEl);
       }});
-      return rows;
     }}
 
     function render() {{
-      grid.innerHTML = sortedRows().map(row => `
-        <article class="card">
-          <video controls muted preload="metadata" src="${{row.video}}"></video>
-          <div class="card-body">
-            <h3>demo_${{String(row.ep_idx).padStart(4, '0')}}</h3>
-            <div class="meta">
-              <div class="metric"><span>image only</span><strong>${{fmt(row.image_score)}}</strong></div>
-              <div class="metric"><span>image+prop</span><strong>${{fmt(row.proprio_score)}}</strong></div>
-              <div class="metric"><span>gap</span><strong>${{fmt(row.gap)}}</strong></div>
-              <div class="metric"><span>label</span><strong>${{row.label ?? 'n/a'}}</strong></div>
-            </div>
-            <canvas data-ep="${{row.ep_idx}}"></canvas>
-            <div class="legend">
-              <span><i class="swatch image"></i>image only</span>
-              <span><i class="swatch proprio"></i>image + proprio</span>
-            </div>
-          </div>
-        </article>
-      `).join('');
-      for (const canvas of grid.querySelectorAll('canvas')) {{
-        const row = DATA.rows.find(r => String(r.ep_idx) === canvas.dataset.ep);
-        drawTrace(canvas, row.image_trace, row.proprio_trace);
-      }}
+      const rows = sortedRows(DATA.rows);
+      renderSummary(rows);
+      cards.innerHTML = rows.map(card).join('');
+      attachVideoSync();
     }}
 
-    document.querySelectorAll('button[data-sort]').forEach(button => {{
-      button.addEventListener('click', () => {{
-        document.querySelectorAll('button[data-sort]').forEach(b => b.classList.remove('active'));
-        button.classList.add('active');
-        currentSort = button.dataset.sort;
-        render();
-      }});
-    }});
-    renderPlots();
+    document.getElementById('sort').addEventListener('change', render);
+    document.getElementById('search').addEventListener('input', render);
+    document.getElementById('smooth-window').addEventListener('change', render);
     render();
   </script>
 </body>
@@ -425,16 +551,7 @@ def main() -> None:
     }
     ep_indices = select_demo_indices(scores, args.max_demos)
     videos = export_videos(args.hdf5, args.output_dir, ep_indices, args.fps)
-
-    plots = {}
-    for method in METHODS:
-        method_dir = args.output_dir / method
-        plots[method] = {
-            "curve": maybe_copy_plot(args.scores_root / method / "square_ph_curve.png", method_dir / "square_ph_curve.png"),
-            "hist": maybe_copy_plot(args.scores_root / method / "square_ph_hist.png", method_dir / "square_ph_hist.png"),
-        }
-
-    build_html(args.output_dir, scores, videos, plots)
+    build_html(args.output_dir, scores, videos)
     print(args.output_dir / "index.html")
 
 
