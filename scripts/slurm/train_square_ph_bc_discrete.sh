@@ -35,4 +35,4 @@ export MKL_NUM_THREADS=2
 python robomimic/scripts/train.py \
   --config "${CONFIG}" \
   --dataset "${DATASET}" \
-  --name square_ph_bc_discrete_wrist_proprio_seed1
+  --name square_ph_bc_discrete_wrist_proprio_seed1_v2
