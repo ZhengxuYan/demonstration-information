@@ -18,7 +18,7 @@
             "on_best_rollout_return": false,
             "on_best_rollout_success_rate": false
         },
-        "epoch_every_n_steps": 500,
+        "epoch_every_n_steps": 100,
         "validation_epoch_every_n_steps": 10,
         "env": null,
         "additional_envs": null,
@@ -39,7 +39,7 @@
         "data": "/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5",
         "output_dir": "/iris/u/jasonyan/data/robomimic_outputs",
         "num_data_workers": 0,
-        "hdf5_cache_mode": "low_dim",
+        "hdf5_cache_mode": "all",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
         "hdf5_normalize_obs": false,
@@ -53,24 +53,22 @@
         ],
         "goal_mode": null,
         "cuda": true,
-        "batch_size": 64,
-        "num_epochs": 200,
+        "batch_size": 100,
+        "num_epochs": 2000,
         "seed": 1
     },
     "algo": {
         "optim_params": {
             "policy": {
-                "optimizer_type": "adamw",
+                "optimizer_type": "adam",
                 "learning_rate": {
                     "initial": 0.0001,
                     "decay_factor": 0.1,
-                    "epoch_schedule": [
-                        100
-                    ],
-                    "scheduler_type": "linear"
+                    "epoch_schedule": [],
+                    "scheduler_type": "multistep"
                 },
                 "regularization": {
-                    "L2": 0.01
+                    "L2": 0.0
                 }
             }
         },

@@ -188,3 +188,7 @@ robomimic_policy_nll_review/
 robomimic_policy_scores/
 distance_diagnostics/
 square_mh_wrist_agent_paired_labels_medium_deploy/
+robomimic_policy_nll_reviews.csv
+square_ph_bc_policy_nll_review/
+square_ph_wrist_review_deploy/
+square_ph_wrist_scores/
