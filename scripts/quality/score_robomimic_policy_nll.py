@@ -68,7 +68,7 @@ def load_algo(checkpoint: Path, dataset: Path, device: torch.device):
     # For GMM policies, robomimic's eval path can force tiny std (1e-4) when
     # low_noise_eval=True, which is useful for action sampling but distorts
     # likelihood scoring. Disable it here so NLL uses the learned variance.
-    policy = algo.nets.get("policy", None)
+    policy = algo.nets["policy"] if "policy" in algo.nets else None
     if policy is not None and hasattr(policy, "low_noise_eval"):
         policy.low_noise_eval = False
     return algo, config
