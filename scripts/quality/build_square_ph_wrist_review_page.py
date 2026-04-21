@@ -475,7 +475,6 @@ def build_html(
     }}
 
     function sortedRows(rows) {{
-      const rows = [...DATA.rows];
       const mode = document.getElementById('sort').value;
       const query = document.getElementById('search').value.toLowerCase().trim();
       let copy = [...rows];
