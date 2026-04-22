@@ -12,6 +12,7 @@ python scripts/quality/build_square_ph_wrist_review_page.py \
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import pickle
@@ -37,11 +38,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--max-demos", type=int, default=36)
-    parser.add_argument("--max-trace-points", type=int, default=220)
+    parser.add_argument("--max-trace-points", type=int, default=0)
+    parser.add_argument("--annotations-csv", type=Path, default=None)
     return parser.parse_args()
 
 
 def downsample(steps: np.ndarray, scores: np.ndarray, max_points: int) -> tuple[np.ndarray, np.ndarray]:
+    if max_points <= 0:
+        return steps, scores
     if steps.size <= max_points:
         return steps, scores
     idx = np.linspace(0, steps.size - 1, max_points).round().astype(int)
@@ -79,6 +83,21 @@ def load_score_bundle(path: Path, max_trace_points: int) -> dict[str, object]:
         "traces": traces,
         "quality_by_ep_idx": quality_by_ep_idx,
     }
+
+
+def load_observability_annotations(path: Path | None) -> dict[int, dict[str, str]]:
+    if path is None or not path.exists():
+        return {}
+    by_ep: dict[int, dict[str, str]] = {}
+    with path.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ep_idx = int(row["ep_idx"])
+            by_ep[ep_idx] = {
+                "observability": (row.get("label") or "").strip() or "unlabeled",
+                "annotation_note": (row.get("note") or "").strip(),
+            }
+    return by_ep
 
 
 def select_demo_indices(scores: dict[str, dict[str, object]], max_demos: int) -> list[int]:
@@ -164,6 +183,7 @@ def export_videos(hdf5_path: Path, output_dir: Path, ep_indices: list[int], fps:
             assets[ep_idx] = {
                 "video": rel.as_posix(),
                 "num_frames": int(len(frames)),
+                "fps": fps,
             }
     return assets
 
@@ -180,6 +200,7 @@ def build_html(
     output_dir: Path,
     scores: dict[str, dict[str, object]],
     videos: dict[int, dict[str, object]],
+    annotations: dict[int, dict[str, str]],
 ) -> None:
     rows = []
     image_scores = scores["image_only"]["ep_scores"]
@@ -191,15 +212,19 @@ def build_html(
         proprio_score = proprio_scores[ep_idx]
         gap = proprio_score - image_score
         label = labels.get(ep_idx)
+        annotation = annotations.get(ep_idx, {})
         rows.append(
             {
                 "ep_idx": ep_idx,
                 "video": videos[ep_idx]["video"],
                 "num_frames": videos[ep_idx]["num_frames"],
+                "fps": videos[ep_idx]["fps"],
                 "image_score": image_score,
                 "proprio_score": proprio_score,
                 "gap": gap,
                 "label": label,
+                "observability": annotation.get("observability", "unlabeled"),
+                "annotation_note": annotation.get("annotation_note", ""),
                 "image_trace": scores["image_only"]["traces"].get(ep_idx, {}),
                 "proprio_trace": scores["image_proprio"]["traces"].get(ep_idx, {}),
             }
@@ -274,6 +299,8 @@ def build_html(
     .summary-card {{ padding: 14px 16px; background: rgba(255, 250, 240, .95); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 12px 32px var(--shadow); }}
     .summary-card h2 {{ margin: 0 0 8px; font-size: 18px; }}
     .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }}
+    .summary-card.full {{ background: rgba(225, 241, 232, .96); }}
+    .summary-card.partial {{ background: rgba(245, 231, 218, .96); }}
     .video-panel {{ position: relative; background: #050403; }}
     .video-panel span {{
       position: absolute;
@@ -305,6 +332,8 @@ def build_html(
     .title {{ display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }}
     .title strong {{ font-size: 17px; }}
     .pill {{ border-radius: 999px; background: #ddeee8; padding: 4px 8px; color: #17433f; font-size: 12px; white-space: nowrap; }}
+    .pill.partial {{ background: #f3e1d6; color: #7b3b22; }}
+    .pill.unlabeled {{ background: #ece8de; color: #60584e; }}
     h2, h3 {{ margin: 0; }}
     .meta {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
     .metric {{
@@ -331,11 +360,17 @@ def build_html(
     <p class="lede">Compares MI scores from a wrist-image-only observation VAE against a wrist-image + robot-proprio observation VAE. Videos are exported from the Square PH HDF5 wrist camera.</p>
     <div class="toolbar">
       <select id="sort">
-        <option value="gap_abs">Sort by |proprio - image|</option>
-        <option value="image_score">Sort image-only</option>
-        <option value="proprio_score">Sort image+proprio</option>
-        <option value="gap">Sort gap</option>
+        <option value="gap_abs">Sort by |wrist + proprio - wrist|</option>
+        <option value="image_score">Sort wrist</option>
+        <option value="proprio_score">Sort wrist + proprio</option>
+        <option value="gap">Sort wrist + proprio - wrist</option>
         <option value="demo">Sort demo id</option>
+      </select>
+      <select id="observability-filter">
+        <option value="all">All observability labels</option>
+        <option value="full">Full only</option>
+        <option value="partial">Partial only</option>
+        <option value="unlabeled">Unlabeled only</option>
       </select>
       <label>smooth window <input id="smooth-window" type="number" min="1" max="101" step="2" value="9"></label>
       <input id="search" placeholder="Filter demo id">
@@ -360,17 +395,30 @@ def build_html(
       return `<div class="metric"><span>${{label}}</span><strong>${{fmt(mean)}}</strong></div>`;
     }}
 
-    function renderSummary(rows) {{
-      document.getElementById('summary').innerHTML = `
-        <article class="summary-card">
-          <h2>Visible demos</h2>
+    function categorySummaryCard(title, cls, rows) {{
+      return `
+        <article class="summary-card ${{cls}}">
+          <h2>${{title}}</h2>
           <div class="summary-grid">
             <div class="metric"><span>count</span><strong>${{rows.length}}</strong></div>
-            ${{statBlock('image mean', rows.map(r => r.image_score))}}
-            ${{statBlock('proprio mean', rows.map(r => r.proprio_score))}}
-            ${{statBlock('gap mean', rows.map(r => r.gap))}}
+            ${{statBlock('wrist mean', rows.map(r => r.image_score))}}
+            ${{statBlock('wrist + proprio mean', rows.map(r => r.proprio_score))}}
+            ${{statBlock('wrist + proprio - wrist mean', rows.map(r => r.gap))}}
           </div>
         </article>`;
+    }}
+
+    function renderSummary(rows) {{
+      const fullRows = rows.filter(r => r.observability === 'full');
+      const partialRows = rows.filter(r => r.observability === 'partial');
+      const unlabeledRows = rows.filter(r => r.observability === 'unlabeled');
+      const cards = [
+        categorySummaryCard('Visible demos', '', rows),
+        categorySummaryCard('Full observability', 'full', fullRows),
+        categorySummaryCard('Partial observability', 'partial', partialRows),
+      ];
+      if (unlabeledRows.length) cards.push(categorySummaryCard('Unlabeled', 'unlabeled', unlabeledRows));
+      document.getElementById('summary').innerHTML = cards.join('');
     }}
 
     function pathFromTrace(trace, xMin, xMax, yMin, yMax) {{
@@ -404,18 +452,23 @@ def build_html(
       return {{steps: trace.steps, scores}};
     }}
 
-    function slopePer100(trace) {{
-      if (!trace || trace.steps.length < 2) return null;
+    function scoreAtStep(trace, step) {{
+      if (!trace || !trace.steps || trace.steps.length === 0) return null;
       const n = trace.steps.length;
-      const meanX = trace.steps.reduce((a, b) => a + b, 0) / n;
-      const meanY = trace.scores.reduce((a, b) => a + b, 0) / n;
-      let num = 0, den = 0;
-      for (let i = 0; i < n; i++) {{
-        const dx = trace.steps[i] - meanX;
-        num += dx * (trace.scores[i] - meanY);
-        den += dx * dx;
+      if (step <= trace.steps[0]) return trace.scores[0];
+      if (step >= trace.steps[n - 1]) return trace.scores[n - 1];
+      for (let i = 1; i < n; i++) {{
+        const leftStep = trace.steps[i - 1];
+        const rightStep = trace.steps[i];
+        if (step <= rightStep) {{
+          const leftScore = trace.scores[i - 1];
+          const rightScore = trace.scores[i];
+          const denom = Math.max(1e-6, rightStep - leftStep);
+          const alpha = (step - leftStep) / denom;
+          return leftScore + alpha * (rightScore - leftScore);
+        }}
       }}
-      return den <= 0 ? null : (num / den) * 100;
+      return trace.scores[n - 1];
     }}
 
     function traceSvg(row) {{
@@ -445,13 +498,15 @@ def build_html(
             <line class="playhead" x1="36" y1="8" x2="36" y2="112"></line>
           </svg>
           <div class="legend">
-            <span><span class="swatch image"></span>image only, slope/100: <strong>${{fmt(slopePer100(imageTrace), 3)}}</strong></span>
-            <span><span class="swatch proprio"></span>image + proprio, slope/100: <strong>${{fmt(slopePer100(proprioTrace), 3)}}</strong></span>
+            <span><span class="swatch image"></span>wrist, current: <strong class="current-image-score">n/a</strong></span>
+            <span><span class="swatch proprio"></span>wrist + proprio, current: <strong class="current-proprio-score">n/a</strong></span>
           </div>
         </div>`;
     }}
 
     function card(row) {{
+      const pillClass = row.observability === 'partial' ? 'partial' : (row.observability === 'unlabeled' ? 'unlabeled' : '');
+      const noteHtml = row.annotation_note ? `<div class="path">note: ${{row.annotation_note}}</div>` : '';
       return `
         <article class="card" data-demo="${{row.ep_idx}}">
           <div class="video-panel">
@@ -460,15 +515,16 @@ def build_html(
           </div>
           ${{traceSvg(row)}}
           <div class="body">
-            <div class="title"><strong>demo_${{String(row.ep_idx).padStart(4, '0')}}</strong><span class="pill">Square PH</span></div>
+            <div class="title"><strong>demo_${{String(row.ep_idx).padStart(4, '0')}}</strong><span class="pill ${{pillClass}}">${{row.observability}}</span></div>
             <div class="meta">
-              <div class="metric"><span>image only</span><strong class="image-score">${{fmt(row.image_score)}}</strong></div>
-              <div class="metric"><span>image + proprio</span><strong class="proprio-score">${{fmt(row.proprio_score)}}</strong></div>
-              <div class="metric"><span>gap</span><strong>${{fmt(row.gap)}}</strong></div>
-              <div class="metric"><span>label</span><strong>${{row.label ?? 'n/a'}}</strong></div>
+              <div class="metric"><span>wrist</span><strong class="image-score">${{fmt(row.image_score)}}</strong></div>
+              <div class="metric"><span>wrist + proprio</span><strong class="proprio-score">${{fmt(row.proprio_score)}}</strong></div>
+              <div class="metric"><span>wrist + proprio - wrist</span><strong>${{fmt(row.gap)}}</strong></div>
+              <div class="metric"><span>observability</span><strong>${{row.observability}}</strong></div>
               <div class="metric"><span>frames</span><strong>${{row.num_frames}}</strong></div>
               <div class="metric"><span>dataset ep</span><strong>${{row.ep_idx}}</strong></div>
             </div>
+            ${{noteHtml}}
             <div class="path">wrist: ${{row.video}}</div>
           </div>
         </article>`;
@@ -476,9 +532,11 @@ def build_html(
 
     function sortedRows(rows) {{
       const mode = document.getElementById('sort').value;
+      const observabilityFilter = document.getElementById('observability-filter').value;
       const query = document.getElementById('search').value.toLowerCase().trim();
       let copy = [...rows];
       if (query) copy = copy.filter(row => `${{row.ep_idx}}`.includes(query));
+      if (observabilityFilter !== 'all') copy = copy.filter(row => row.observability === observabilityFilter);
       if (mode === 'image_score') copy.sort((a, b) => b.image_score - a.image_score);
       else if (mode === 'proprio_score') copy.sort((a, b) => b.proprio_score - a.proprio_score);
       else if (mode === 'gap') copy.sort((a, b) => b.gap - a.gap);
@@ -487,25 +545,46 @@ def build_html(
       return copy;
     }}
 
-    function updatePlayhead(cardEl) {{
+    function frameIndexForVideo(video, row, mediaTime) {{
+      const fps = row.fps || 20;
+      const sourceTime = Number.isFinite(mediaTime) ? mediaTime : video.currentTime;
+      return Math.min(row.num_frames - 1, Math.max(0, Math.round(sourceTime * fps)));
+    }}
+
+    function updatePlayhead(cardEl, mediaTime) {{
       const video = cardEl.querySelector('video[data-role="wrist"]') || cardEl.querySelector('video');
       const playhead = cardEl.querySelector('.playhead');
+      const imageReadout = cardEl.querySelector('.current-image-score');
+      const proprioReadout = cardEl.querySelector('.current-proprio-score');
       if (!video || !playhead) return;
-      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-      const progress = duration ? Math.min(1, Math.max(0, video.currentTime / duration)) : 0;
-      const x = 36 + progress * (344 - 36);
+      const row = DATA.rows.find(r => String(r.ep_idx) === cardEl.dataset.demo);
+      if (!row) return;
+      const frameIdx = frameIndexForVideo(video, row, mediaTime);
+      const x = 36 + ((frameIdx / Math.max(1, row.num_frames - 1)) * (344 - 36));
       playhead.setAttribute('x1', x.toFixed(2));
       playhead.setAttribute('x2', x.toFixed(2));
+      const window = smoothingWindow();
+      const imageTrace = smoothTrace(row.image_trace, window);
+      const proprioTrace = smoothTrace(row.proprio_trace, window);
+      if (imageReadout) imageReadout.textContent = fmt(scoreAtStep(imageTrace, frameIdx), 3);
+      if (proprioReadout) proprioReadout.textContent = fmt(scoreAtStep(proprioTrace, frameIdx), 3);
     }}
 
     function syncLoop(video, cardEl) {{
-      updatePlayhead(cardEl);
       if (!video.paused && !video.ended) {{
         if (video.requestVideoFrameCallback) {{
-          video.requestVideoFrameCallback(() => syncLoop(video, cardEl));
+          video.requestVideoFrameCallback((now, metadata) => {{
+            updatePlayhead(cardEl, metadata.mediaTime);
+            syncLoop(video, cardEl);
+          }});
         }} else {{
-          requestAnimationFrame(() => syncLoop(video, cardEl));
+          requestAnimationFrame(() => {{
+            updatePlayhead(cardEl);
+            syncLoop(video, cardEl);
+          }});
         }}
+      }} else {{
+        updatePlayhead(cardEl);
       }}
     }}
 
@@ -530,6 +609,7 @@ def build_html(
     }}
 
     document.getElementById('sort').addEventListener('change', render);
+    document.getElementById('observability-filter').addEventListener('change', render);
     document.getElementById('search').addEventListener('input', render);
     document.getElementById('smooth-window').addEventListener('change', render);
     render();
@@ -548,9 +628,10 @@ def main() -> None:
         method: load_score_bundle(args.scores_root / method / "square_ph.pkl", args.max_trace_points)
         for method in METHODS
     }
+    annotations = load_observability_annotations(args.annotations_csv)
     ep_indices = select_demo_indices(scores, args.max_demos)
     videos = export_videos(args.hdf5, args.output_dir, ep_indices, args.fps)
-    build_html(args.output_dir, scores, videos)
+    build_html(args.output_dir, scores, videos, annotations)
     print(args.output_dir / "index.html")
 
 

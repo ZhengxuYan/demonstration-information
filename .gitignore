@@ -194,3 +194,7 @@ square_ph_wrist_review_deploy/
 square_ph_wrist_scores/
 square_ph_wrist_review_deploy_share/
 square_ph_wrist_review_deploy_share_60/
+share_vae_checkpoints/
+square_ph_wrist_annotation_deploy/
+square_ph_observability_annotations.csv
+square_ph_observability_annotations.json
