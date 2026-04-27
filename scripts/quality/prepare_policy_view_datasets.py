@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expert200-zip", type=Path, default=None)
     parser.add_argument("--expert200-source", type=Path, default=None)
+    parser.add_argument("--expert200-num-demos", type=int, default=200)
     parser.add_argument("--ph-dp-num-demos", type=int, default=50)
     parser.add_argument("--ph-dp-seed", type=int, default=42)
     parser.add_argument("--overwrite", action="store_true")
@@ -197,6 +198,7 @@ def build_dataset(
     render_height: int,
     render_width: int,
     overwrite: bool,
+    env_meta_fallback_path: Path | None = None,
 ) -> None:
     if dst_path.exists():
         if not overwrite:
@@ -215,7 +217,13 @@ def build_dataset(
         copy_attrs(src["data"], data_out)
 
         if add_left_close_low:
-            env_meta = json.loads(src["data"].attrs["env_args"])
+            env_args = src["data"].attrs.get("env_args")
+            if env_args is None:
+                if env_meta_fallback_path is None:
+                    raise KeyError(f"{src_path} is missing data.attrs['env_args']")
+                with h5py.File(env_meta_fallback_path, "r") as fallback:
+                    env_args = fallback["data"].attrs["env_args"]
+            env_meta = json.loads(env_args)
             env = create_env(env_meta, render_height, render_width)
             env.reset()
 
@@ -292,8 +300,22 @@ def prepare_expert200(args: argparse.Namespace) -> None:
     out = args.out_root / "expert200"
     src = find_expert200_source(args)
     validate_source(src, expected_action_dim=7)
-    build_dataset(src, out / "expert200_agent_wrist_image_abs.hdf5", None, False, args.render_height, args.render_width, args.overwrite)
-    build_dataset(src, out / "expert200_left_close_low_wrist_image_abs.hdf5", None, True, args.render_height, args.render_width, args.overwrite)
+    with h5py.File(src, "r") as f:
+        num_demos = len(f["data"])
+    selected = list(range(min(args.expert200_num_demos, num_demos)))
+    if num_demos != args.expert200_num_demos:
+        print(f"expert200 source has {num_demos} demos; using first {len(selected)} demos")
+    build_dataset(src, out / "expert200_agent_wrist_image_abs.hdf5", selected, False, args.render_height, args.render_width, args.overwrite)
+    build_dataset(
+        src,
+        out / "expert200_left_close_low_wrist_image_abs.hdf5",
+        selected,
+        True,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+        env_meta_fallback_path=args.ph_image_abs,
+    )
 
 
 def main() -> None:
