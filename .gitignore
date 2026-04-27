@@ -198,3 +198,5 @@ share_vae_checkpoints/
 square_ph_wrist_annotation_deploy/
 square_ph_observability_annotations.csv
 square_ph_observability_annotations.json
+expert200/
+square_ph_custom_view_preview_10demos/
