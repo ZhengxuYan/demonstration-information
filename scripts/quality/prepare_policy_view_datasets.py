@@ -240,17 +240,19 @@ def find_expert200_source(args: argparse.Namespace) -> Path:
     candidates = sorted(extract_dir.rglob("image_abs.hdf5")) + sorted(extract_dir.rglob("*.hdf5"))
     for candidate in candidates:
         try:
-            validate_source(candidate, expected_action_dim=10)
+            validate_source(candidate, expected_action_dim=7)
             return candidate
         except Exception as exc:
-            print(f"skipping non-abs-action candidate {candidate}: {exc}")
+            print(f"skipping non-DP-raw-action candidate {candidate}: {exc}")
     raise FileNotFoundError(f"No robomimic-compatible absolute-action HDF5 found in {extract_dir}")
 
 
 def prepare_ph(args: argparse.Namespace) -> None:
     out = args.out_root / "square_ph"
     validate_source(args.ph_image, expected_action_dim=7)
-    validate_source(args.ph_image_abs, expected_action_dim=10)
+    # Diffusion Policy stores robomimic absolute actions as raw 7D actions in
+    # HDF5 and expands them to 10D internally when abs_action=True.
+    validate_source(args.ph_image_abs, expected_action_dim=7)
     with h5py.File(args.ph_image_abs, "r") as f:
         num_abs_demos = len(f["data"])
     selected = selected_demo_indices(num_abs_demos, args.ph_dp_num_demos, args.ph_dp_seed)
@@ -265,7 +267,7 @@ def prepare_ph(args: argparse.Namespace) -> None:
 def prepare_expert200(args: argparse.Namespace) -> None:
     out = args.out_root / "expert200"
     src = find_expert200_source(args)
-    validate_source(src, expected_action_dim=10)
+    validate_source(src, expected_action_dim=7)
     build_dataset(src, out / "expert200_agent_wrist_image_abs.hdf5", None, False, args.render_height, args.render_width, args.overwrite)
     build_dataset(src, out / "expert200_left_close_low_wrist_image_abs.hdf5", None, True, args.render_height, args.render_width, args.overwrite)
 
