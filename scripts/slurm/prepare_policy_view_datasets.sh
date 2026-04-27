@@ -39,7 +39,7 @@ if [[ "${TARGET}" == "expert200" && -n "${EXPERT200_SOURCE:-}" ]]; then
   EXTRA_ARGS+=(--expert200-source "${EXPERT200_SOURCE}")
 fi
 
-python scripts/quality/prepare_policy_view_datasets.py "${TARGET}" "${EXTRA_ARGS[@]}"
+python scripts/quality/prepare_policy_view_datasets.py "${TARGET}" --overwrite "${EXTRA_ARGS[@]}"
 
 if [[ "${TARGET}" == "ph" ]]; then
   python scripts/quality/verify_policy_view_dataset.py \

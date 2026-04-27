@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import shutil
+import sys
+import types
 import zipfile
 from pathlib import Path
 
@@ -86,7 +88,26 @@ def validate_source(path: Path, expected_action_dim: int) -> None:
             raise ValueError(f"{path} has action dim {action_dim}; expected {expected_action_dim}")
 
 
+def install_lang_utils_stub() -> None:
+    """Avoid loading CLIP / transformers when robomimic only needs env reset/render.
+
+    The local robomimic fork imports lang_utils at EnvRobosuite import time, and
+    lang_utils eagerly imports transformers plus CLIP weights. Dataset rendering
+    passes lang=None, so language embeddings are unused here.
+    """
+    module_name = "robomimic.utils.lang_utils"
+    if module_name in sys.modules:
+        return
+    stub = types.ModuleType(module_name)
+    stub.LANG_EMB_OBS_KEY = "lang_emb"
+    stub.get_lang_emb = lambda lang: None
+    stub.get_lang_emb_shape = lambda: []
+    sys.modules[module_name] = stub
+
+
 def create_env(env_meta: dict, height: int, width: int):
+    install_lang_utils_stub()
+
     import robomimic.utils.env_utils as EnvUtils
     import robomimic.utils.obs_utils as ObsUtils
 
