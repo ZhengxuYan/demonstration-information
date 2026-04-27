@@ -38,6 +38,9 @@ fi
 if [[ "${TARGET}" == "expert200" && -n "${EXPERT200_SOURCE:-}" ]]; then
   EXTRA_ARGS+=(--expert200-source "${EXPERT200_SOURCE}")
 fi
+if [[ "${TARGET}" == "expert200" && -n "${EXPERT200_NUM_DEMOS:-}" ]]; then
+  EXTRA_ARGS+=(--expert200-num-demos "${EXPERT200_NUM_DEMOS}")
+fi
 
 python scripts/quality/prepare_policy_view_datasets.py "${TARGET}" --overwrite "${EXTRA_ARGS[@]}"
 
@@ -67,15 +70,16 @@ if [[ "${TARGET}" == "ph" ]]; then
     --required-obs-key left_close_low_image \
     --required-obs-key robot0_eye_in_hand_image
 else
+  EXPECTED_EXPERT_DEMOS="${EXPERT200_NUM_DEMOS:-212}"
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/expert200/expert200_agent_wrist_image_abs.hdf5 \
-    --expected-demos 200 \
+    --expected-demos "${EXPECTED_EXPERT_DEMOS}" \
     --expected-action-dim 7 \
     --required-obs-key agentview_image \
     --required-obs-key robot0_eye_in_hand_image
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/expert200/expert200_left_close_low_wrist_image_abs.hdf5 \
-    --expected-demos 200 \
+    --expected-demos "${EXPECTED_EXPERT_DEMOS}" \
     --expected-action-dim 7 \
     --required-obs-key left_close_low_image \
     --required-obs-key robot0_eye_in_hand_image

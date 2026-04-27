@@ -32,10 +32,10 @@ python "${DEMO_REPO}/scripts/setup/install_diffusion_policy_view_tasks.py" \
 
 case "${VIEW}" in
   agent_wrist)
-    TASK=expert200_dp_agent_wrist_abs_200
+    TASK=expert200_dp_agent_wrist_abs_212
     ;;
   left_close_low_wrist)
-    TASK=expert200_dp_left_close_low_wrist_abs_200
+    TASK=expert200_dp_left_close_low_wrist_abs_212
     ;;
 esac
 RUN_NAME="${TASK}"

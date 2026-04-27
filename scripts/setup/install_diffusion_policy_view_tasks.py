@@ -133,12 +133,12 @@ def write_tasks(dp_repo: Path, data_root: Path) -> None:
             "left_close_low_image",
             "left_close_low_image",
         ),
-        "expert200_dp_agent_wrist_abs_200": (
+        "expert200_dp_agent_wrist_abs_212": (
             data_root / "expert200" / "expert200_agent_wrist_image_abs.hdf5",
             "agentview_image",
             "agentview_image",
         ),
-        "expert200_dp_left_close_low_wrist_abs_200": (
+        "expert200_dp_left_close_low_wrist_abs_212": (
             data_root / "expert200" / "expert200_left_close_low_wrist_image_abs.hdf5",
             "left_close_low_image",
             "left_close_low_image",
