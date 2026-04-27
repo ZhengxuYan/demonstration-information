@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
@@ -24,6 +25,23 @@ LEFT_CLOSE_LOW_PATCH = """    def _render_left_close_low_image(self):
             sim.model.cam_quat[cam_id] = old_quat
             sim.forward()
         return np.moveaxis(frame.astype(np.float32) / 255.0, -1, 0)
+
+"""
+
+GET_OBSERVATION_PATCH = """    def get_observation(self, raw_obs=None):
+        if raw_obs is None:
+            raw_obs = self.env.get_observation()
+
+        if 'left_close_low_image' in self.observation_space and 'left_close_low_image' not in raw_obs:
+            raw_obs = dict(raw_obs)
+            raw_obs['left_close_low_image'] = self._render_left_close_low_image()
+
+        self.render_cache = raw_obs[self.render_obs_key]
+
+        obs = dict()
+        for key in self.observation_space.keys():
+            obs[key] = raw_obs[key]
+        return obs
 
 """
 
@@ -130,31 +148,26 @@ def write_tasks(dp_repo: Path, data_root: Path) -> None:
 def patch_wrapper(dp_repo: Path) -> None:
     path = dp_repo / "diffusion_policy" / "env" / "robomimic" / "robomimic_image_wrapper.py"
     text = path.read_text()
+    text = re.sub(
+        r"    def _render_left_close_low_image\(self\):\n.*?\n\n    def get_observation\(self, raw_obs=None\):",
+        LEFT_CLOSE_LOW_PATCH + "    def get_observation(self, raw_obs=None):",
+        text,
+        flags=re.S,
+    )
     if "_render_left_close_low_image" not in text:
-        marker = "    def get_observation(self, raw_obs=None):\n"
-        text = text.replace(marker, LEFT_CLOSE_LOW_PATCH + marker)
-    old = """        self.render_cache = raw_obs[self.render_obs_key]
-
-        obs = dict()
-        for key in self.observation_space.keys():
-            obs[key] = raw_obs[key]
-        return obs
-"""
-    new = """        if 'left_close_low_image' in self.observation_space and 'left_close_low_image' not in raw_obs:
-            raw_obs = dict(raw_obs)
-            raw_obs['left_close_low_image'] = self._render_left_close_low_image()
-
-        self.render_cache = raw_obs[self.render_obs_key]
-
-        obs = dict()
-        for key in self.observation_space.keys():
-            obs[key] = raw_obs[key]
-        return obs
-"""
-    if new not in text:
-        if old not in text:
-            raise RuntimeError(f"Could not find get_observation patch target in {path}")
-        text = text.replace(old, new)
+        marker = "    def get_observation(self, raw_obs=None):"
+        if marker not in text:
+            raise RuntimeError(f"Could not find get_observation marker in {path}")
+        text = text.replace(marker, LEFT_CLOSE_LOW_PATCH + marker, 1)
+    text, count = re.subn(
+        r"    def get_observation\(self, raw_obs=None\):\n.*?\n    def seed\(self, seed=None\):",
+        GET_OBSERVATION_PATCH + "    def seed(self, seed=None):",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if count != 1:
+        raise RuntimeError(f"Could not replace get_observation in {path}")
     path.write_text(text)
     print(f"patched {path}")
 
