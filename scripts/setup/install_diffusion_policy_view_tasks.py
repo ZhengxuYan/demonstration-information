@@ -32,14 +32,19 @@ GET_OBSERVATION_PATCH = """    def get_observation(self, raw_obs=None):
         if raw_obs is None:
             raw_obs = self.env.get_observation()
 
-        if 'left_close_low_image' in self.observation_space and 'left_close_low_image' not in raw_obs:
+        obs_keys = self.observation_space.spaces.keys()
+        needs_left_close_low = (
+            self.render_obs_key == 'left_close_low_image'
+            or 'left_close_low_image' in obs_keys
+        )
+        if needs_left_close_low and 'left_close_low_image' not in raw_obs:
             raw_obs = dict(raw_obs)
             raw_obs['left_close_low_image'] = self._render_left_close_low_image()
 
         self.render_cache = raw_obs[self.render_obs_key]
 
         obs = dict()
-        for key in self.observation_space.keys():
+        for key in obs_keys:
             obs[key] = raw_obs[key]
         return obs
 

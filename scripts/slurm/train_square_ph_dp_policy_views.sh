@@ -55,7 +55,7 @@ print("RobomimicImageWrapper:", inspect.getfile(RobomimicImageWrapper))
 print(source)
 if "_render_left_close_low_image" not in inspect.getsource(RobomimicImageWrapper):
     raise RuntimeError("left_close_low wrapper patch is missing")
-if "raw_obs['left_close_low_image']" not in source:
+if "needs_left_close_low" not in source or "raw_obs['left_close_low_image']" not in source:
     raise RuntimeError("get_observation does not synthesize left_close_low_image")
 PY
 
