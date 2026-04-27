@@ -163,9 +163,12 @@ def set_left_close_low_pose(env) -> None:
 
 def render_left_close_low_images(env, states: np.ndarray, height: int, width: int) -> np.ndarray:
     frames = []
+    set_left_close_low_pose(env)
     for state in states:
-        env.reset_to({"states": state})
-        set_left_close_low_pose(env)
+        # Avoid EnvRobosuite.reset_to here: it also materializes observations,
+        # which can trigger an extra image render before our custom camera render.
+        env.env.sim.set_state_from_flattened(state)
+        env.env.sim.forward()
         frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
         frames.append(np.asarray(frame, dtype=np.uint8))
     return np.stack(frames, axis=0)
