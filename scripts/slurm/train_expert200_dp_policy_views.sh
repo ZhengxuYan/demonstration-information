@@ -44,6 +44,20 @@ cd "${DP_REPO}"
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 export EGL_DEVICE_ID=0
+export PYTHONPATH="${DP_REPO}:${PYTHONPATH:-}"
+
+python - <<'PY'
+import inspect
+from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImageWrapper
+
+source = inspect.getsource(RobomimicImageWrapper.get_observation)
+print("RobomimicImageWrapper:", inspect.getfile(RobomimicImageWrapper))
+print(source)
+if "_render_left_close_low_image" not in inspect.getsource(RobomimicImageWrapper):
+    raise RuntimeError("left_close_low wrapper patch is missing")
+if "raw_obs['left_close_low_image']" not in source:
+    raise RuntimeError("get_observation does not synthesize left_close_low_image")
+PY
 
 python train.py \
   --config-name=train_diffusion_unet_image_workspace \
