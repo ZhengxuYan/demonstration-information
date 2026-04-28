@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Repair expert200 gripper qpos observations without re-rendering images."""
+"""Repair expert200 DP datasets without re-rendering images.
+
+This script fixes the generated expert200 policy-view HDF5 files in-place:
+- backfills robomimic env metadata
+- converts raw delta actions to robomimic absolute actions
+- repairs robot0_gripper_qpos to the expected 2D shape
+"""
 
 from __future__ import annotations
 
@@ -9,9 +15,17 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
-from prepare_policy_view_datasets import create_env, select_gripper_joint_indexes, sorted_demo_keys, upsert_obs_pair
+from prepare_policy_view_datasets import (
+    create_env,
+    load_env_meta,
+    select_gripper_joint_indexes,
+    sorted_demo_keys,
+    upgrade_controller_config,
+    upsert_obs_pair,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +43,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--env-meta-source",
+        "--delta-env-meta-source",
+        type=Path,
+        default=Path("/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5"),
+    )
+    parser.add_argument(
+        "--output-env-meta-source",
         type=Path,
         default=Path("/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image_abs.hdf5"),
     )
@@ -60,22 +79,77 @@ def collect_gripper_qpos(env, states: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype=np.float32)
 
 
-def repair_dataset(path: Path, env, env_args: str) -> None:
+def controller_goal(robot):
+    if hasattr(robot, "part_controllers"):
+        controller = robot.part_controllers["right"]
+    else:
+        controller = robot.controller
+    return (
+        np.asarray(controller.goal_pos, dtype=np.float32),
+        Rotation.from_matrix(np.asarray(controller.goal_ori)).as_rotvec().astype(np.float32),
+    )
+
+
+def convert_delta_actions_to_abs(env, states: np.ndarray, actions: np.ndarray, demo_attrs) -> np.ndarray:
+    d_a = len(env.env.robots[0].action_limits[0])
+    stacked_actions = actions.reshape(*actions.shape[:-1], -1, d_a)
+    action_goal_pos = np.zeros(stacked_actions.shape[:-1] + (3,), dtype=np.float32)
+    action_goal_ori = np.zeros(stacked_actions.shape[:-1] + (3,), dtype=np.float32)
+    action_remainder = stacked_actions[..., 6:].astype(np.float32)
+
+    initial_state = {"states": states[0]}
+    if "model_file" in demo_attrs:
+        initial_state["model"] = demo_attrs["model_file"]
+    if "ep_meta" in demo_attrs:
+        initial_state["ep_meta"] = demo_attrs["ep_meta"]
+
+    for i, state in enumerate(states):
+        if i == 0:
+            env.reset_to(initial_state)
+        else:
+            env.reset_to({"states": state})
+        for robot_idx, robot in enumerate(env.env.robots):
+            robot.control(stacked_actions[i, robot_idx], policy_step=True)
+            action_goal_pos[i, robot_idx], action_goal_ori[i, robot_idx] = controller_goal(robot)
+
+    stacked_abs_actions = np.concatenate([action_goal_pos, action_goal_ori, action_remainder], axis=-1)
+    return stacked_abs_actions.reshape(actions.shape).astype(np.float32)
+
+
+def repair_dataset(path: Path, qpos_env, action_env, env_args: str) -> None:
     with h5py.File(path, "r+") as f:
         f["data"].attrs["env_args"] = env_args
         for demo_key in tqdm(sorted_demo_keys(f["data"]), desc=f"repairing {path.name}"):
             demo = f["data"][demo_key]
-            values = collect_gripper_qpos(env, demo["states"][:])
+            states = demo["states"][:]
+            if "actions_delta" not in demo:
+                demo.create_dataset("actions_delta", data=demo["actions"][:])
+            delta_actions = demo["actions_delta"][:]
+            abs_actions = convert_delta_actions_to_abs(action_env, states, delta_actions, demo.attrs)
+            demo["actions"][:] = abs_actions
+            values = collect_gripper_qpos(qpos_env, states)
             upsert_obs_pair(demo, "robot0_gripper_qpos", values)
 
 
 def main() -> None:
     args = parse_args()
-    env_args = load_env_args(args.env_meta_source)
-    env = create_env(json.loads(env_args), args.render_height, args.render_width, ["agentview"])
-    env.reset()
-    repair_dataset(args.agent_dataset, env, env_args)
-    repair_dataset(args.left_dataset, env, env_args)
+    env_args = load_env_args(args.output_env_meta_source)
+    qpos_env = create_env(json.loads(env_args), args.render_height, args.render_width, ["agentview"])
+    qpos_env.reset()
+
+    import robomimic.utils.env_utils as EnvUtils
+    import robomimic.utils.obs_utils as ObsUtils
+
+    delta_meta = upgrade_controller_config(load_env_meta(args.delta_env_meta_source))
+    ObsUtils.initialize_obs_utils_with_obs_specs({"obs": {"low_dim": ["robot0_eef_pos"], "rgb": []}})
+    action_env = EnvUtils.create_env_from_metadata(
+        env_meta=delta_meta,
+        render=False,
+        render_offscreen=False,
+        use_image_obs=False,
+    )
+    repair_dataset(args.agent_dataset, qpos_env, action_env, env_args)
+    repair_dataset(args.left_dataset, qpos_env, action_env, env_args)
 
 
 if __name__ == "__main__":
