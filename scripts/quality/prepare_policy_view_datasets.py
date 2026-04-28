@@ -184,6 +184,14 @@ def upsert_obs_pair(demo_out, key: str, values: np.ndarray) -> None:
     next_obs.create_dataset(key, data=next_values)
 
 
+def select_robot_value(value, arm: str):
+    if isinstance(value, dict):
+        return value[arm]
+    if isinstance(value, (list, tuple)):
+        return value[0]
+    return value
+
+
 def render_required_observations(
     env,
     states: np.ndarray,
@@ -214,6 +222,9 @@ def render_required_observations(
     original_agent_quat = env.env.sim.model.cam_quat[cam_id].copy()
     robot = env.env.robots[0]
     arm = robot.arms[0] if getattr(robot, "arms", None) else "right"
+    eef_site_id = select_robot_value(robot.eef_site_id, arm)
+    eef_body_name = select_robot_value(robot.robot_model.eef_name, arm)
+    gripper_joint_pos_indexes = select_robot_value(robot._ref_gripper_joint_pos_indexes, arm)
 
     for state in states:
         # Avoid EnvRobosuite.reset_to: it materializes observations and can
@@ -222,11 +233,11 @@ def render_required_observations(
         env.env.sim.forward()
 
         if need_lowdim:
-            eef_pos = np.asarray(env.env.sim.data.site_xpos[robot.eef_site_id[arm]], dtype=np.float32)
-            eef_quat = T.convert_quat(env.env.sim.data.get_body_xquat(robot.robot_model.eef_name[arm]), to="xyzw")
+            eef_pos = np.asarray(env.env.sim.data.site_xpos[eef_site_id], dtype=np.float32)
+            eef_quat = T.convert_quat(env.env.sim.data.get_body_xquat(eef_body_name), to="xyzw")
             eef_quat = np.asarray(eef_quat, dtype=np.float32)
             gripper_qpos = np.asarray(
-                [env.env.sim.data.qpos[index] for index in robot._ref_gripper_joint_pos_indexes[arm]],
+                [env.env.sim.data.qpos[index] for index in gripper_joint_pos_indexes],
                 dtype=np.float32,
             )
             lowdim_values["robot0_eef_pos"].append(eef_pos)
