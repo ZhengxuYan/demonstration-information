@@ -162,23 +162,6 @@ def set_left_close_low_pose(env) -> None:
     env.env.sim.forward()
 
 
-def render_camera_images(env, states: np.ndarray, height: int, width: int, camera_name: str) -> np.ndarray:
-    frames = []
-    for state in states:
-        # Avoid EnvRobosuite.reset_to here: it also materializes observations,
-        # which can trigger an extra image render before our custom camera render.
-        env.env.sim.set_state_from_flattened(state)
-        env.env.sim.forward()
-        frame = env.render(mode="rgb_array", height=height, width=width, camera_name=camera_name)
-        frames.append(np.asarray(frame, dtype=np.uint8))
-    return np.stack(frames, axis=0)
-
-
-def render_left_close_low_images(env, states: np.ndarray, height: int, width: int) -> np.ndarray:
-    set_left_close_low_pose(env)
-    return render_camera_images(env, states, height, width, "agentview")
-
-
 def upsert_image_pair(demo_out, key: str, images: np.ndarray) -> None:
     obs = demo_out.require_group("obs")
     next_obs = demo_out.require_group("next_obs")
@@ -201,44 +184,89 @@ def upsert_obs_pair(demo_out, key: str, values: np.ndarray) -> None:
     next_obs.create_dataset(key, data=next_values)
 
 
-def ensure_required_obs_images(demo_out, env, states: np.ndarray, image_key: str, height: int, width: int) -> None:
-    obs = demo_out.get("obs")
-    has_image_key = obs is not None and image_key in obs
-    has_wrist = obs is not None and "robot0_eye_in_hand_image" in obs
-    if not has_image_key:
-        if image_key == "left_close_low_image":
-            images = render_left_close_low_images(env, states, height, width)
-        elif image_key == "agentview_image":
-            images = render_camera_images(env, states, height, width, "agentview")
-        else:
-            raise ValueError(f"Unsupported image key {image_key}")
-        upsert_image_pair(demo_out, image_key, images)
-    if not has_wrist:
-        images = render_camera_images(env, states, height, width, "robot0_eye_in_hand")
-        upsert_image_pair(demo_out, "robot0_eye_in_hand_image", images)
+def render_required_observations(
+    env,
+    states: np.ndarray,
+    image_key: str,
+    height: int,
+    width: int,
+    need_image_key: bool,
+    need_wrist: bool,
+    need_lowdim: bool,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    image_values: dict[str, list[np.ndarray]] = {}
+    lowdim_values: dict[str, list[np.ndarray]] = {}
+    if need_image_key:
+        image_values[image_key] = []
+    if need_wrist:
+        image_values["robot0_eye_in_hand_image"] = []
+    if need_lowdim:
+        lowdim_values = {
+            "robot0_eef_pos": [],
+            "robot0_eef_quat": [],
+            "robot0_gripper_qpos": [],
+        }
 
+    cam_id = env.env.sim.model.camera_name2id("agentview")
+    original_agent_pos = env.env.sim.model.cam_pos[cam_id].copy()
+    original_agent_quat = env.env.sim.model.cam_quat[cam_id].copy()
 
-def collect_lowdim_obs(env, states: np.ndarray) -> dict[str, np.ndarray]:
-    values = {
-        "robot0_eef_pos": [],
-        "robot0_eef_quat": [],
-        "robot0_gripper_qpos": [],
-    }
     for state in states:
+        # Avoid EnvRobosuite.reset_to: it materializes observations and can
+        # trigger extra image rendering before our selected camera renders.
         env.env.sim.set_state_from_flattened(state)
         env.env.sim.forward()
-        obs = env.env._get_observations(force_update=True)
-        for key in values:
-            values[key].append(np.asarray(obs[key], dtype=np.float32))
-    return {key: np.stack(items, axis=0) for key, items in values.items()}
+
+        if need_lowdim:
+            raw_obs = env.env._get_observations(force_update=True)
+            for key in lowdim_values:
+                lowdim_values[key].append(np.asarray(raw_obs[key], dtype=np.float32))
+
+        if need_image_key and image_key == "agentview_image":
+            frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
+            image_values[image_key].append(np.asarray(frame, dtype=np.uint8))
+        elif need_image_key and image_key == "left_close_low_image":
+            env.env.sim.model.cam_pos[cam_id] = LEFT_CLOSE_LOW_POS
+            env.env.sim.model.cam_quat[cam_id] = LEFT_CLOSE_LOW_QUAT_WXYZ
+            env.env.sim.forward()
+            frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
+            image_values[image_key].append(np.asarray(frame, dtype=np.uint8))
+            env.env.sim.model.cam_pos[cam_id] = original_agent_pos
+            env.env.sim.model.cam_quat[cam_id] = original_agent_quat
+            env.env.sim.forward()
+        elif need_image_key:
+            raise ValueError(f"Unsupported image key {image_key}")
+
+        if need_wrist:
+            frame = env.render(mode="rgb_array", height=height, width=width, camera_name="robot0_eye_in_hand")
+            image_values["robot0_eye_in_hand_image"].append(np.asarray(frame, dtype=np.uint8))
+
+    stacked_images = {key: np.stack(values, axis=0) for key, values in image_values.items()}
+    stacked_lowdim = {key: np.stack(values, axis=0) for key, values in lowdim_values.items()}
+    return stacked_images, stacked_lowdim
 
 
-def ensure_required_lowdim_obs(demo_out, env, states: np.ndarray) -> None:
+def ensure_required_observations(demo_out, env, states: np.ndarray, image_key: str, height: int, width: int) -> None:
     obs = demo_out.get("obs")
+    need_image_key = obs is None or image_key not in obs
+    need_wrist = obs is None or "robot0_eye_in_hand_image" not in obs
     required = ("robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
-    if obs is not None and all(key in obs for key in required):
+    need_lowdim = obs is None or any(key not in obs for key in required)
+    if not need_image_key and not need_wrist and not need_lowdim:
         return
-    lowdim = collect_lowdim_obs(env, states)
+
+    images, lowdim = render_required_observations(
+        env=env,
+        states=states,
+        image_key=image_key,
+        height=height,
+        width=width,
+        need_image_key=need_image_key,
+        need_wrist=need_wrist,
+        need_lowdim=need_lowdim,
+    )
+    for key, values in images.items():
+        upsert_image_pair(demo_out, key, values)
     for key, values in lowdim.items():
         upsert_obs_pair(demo_out, key, values)
 
@@ -306,8 +334,7 @@ def build_dataset(
             copy_group(src["data"][old_key], demo_out)
             if add_left_close_low or needs_generated_obs:
                 states = demo_out["states"][:]
-                ensure_required_obs_images(demo_out, env, states, image_key, render_height, render_width)
-                ensure_required_lowdim_obs(demo_out, env, states)
+                ensure_required_observations(demo_out, env, states, image_key, render_height, render_width)
 
         write_masks(dst, new_demo_keys)
         dst.attrs["source_path"] = str(src_path)

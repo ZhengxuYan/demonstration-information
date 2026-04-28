@@ -25,15 +25,27 @@ def main() -> None:
         expected = [f"demo_{i}" for i in range(args.expected_demos)]
         if demos != expected:
             raise AssertionError(f"Expected contiguous demos {expected[:3]}...{expected[-3:]}, got {demos[:3]}...{demos[-3:]}")
-        first = f["data"]["demo_0"]
-        action_dim = int(first["actions"].shape[-1])
-        if action_dim != args.expected_action_dim:
-            raise AssertionError(f"Expected action dim {args.expected_action_dim}, got {action_dim}")
-        for key in args.required_obs_key:
-            if key not in first["obs"]:
-                raise AssertionError(f"Missing obs key {key}")
-            if key not in first["next_obs"]:
-                raise AssertionError(f"Missing next_obs key {key}")
+        action_dim = None
+        for demo_key in demos:
+            demo = f["data"][demo_key]
+            horizon = int(demo["actions"].shape[0])
+            this_action_dim = int(demo["actions"].shape[-1])
+            if this_action_dim != args.expected_action_dim:
+                raise AssertionError(f"{demo_key}: expected action dim {args.expected_action_dim}, got {this_action_dim}")
+            action_dim = this_action_dim
+            if "states" in demo and int(demo["states"].shape[0]) != horizon:
+                raise AssertionError(f"{demo_key}: states length {demo['states'].shape[0]} != actions length {horizon}")
+            for key in args.required_obs_key:
+                if key not in demo["obs"]:
+                    raise AssertionError(f"{demo_key}: missing obs key {key}")
+                if key not in demo["next_obs"]:
+                    raise AssertionError(f"{demo_key}: missing next_obs key {key}")
+                if int(demo["obs"][key].shape[0]) != horizon:
+                    raise AssertionError(f"{demo_key}: obs/{key} length {demo['obs'][key].shape[0]} != actions length {horizon}")
+                if int(demo["next_obs"][key].shape[0]) != horizon:
+                    raise AssertionError(
+                        f"{demo_key}: next_obs/{key} length {demo['next_obs'][key].shape[0]} != actions length {horizon}"
+                    )
         print(f"ok {args.dataset}: demos={len(demos)} action_dim={action_dim} obs_keys={args.required_obs_key}")
 
 
