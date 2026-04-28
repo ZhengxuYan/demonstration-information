@@ -90,24 +90,15 @@ def controller_goal(robot):
     )
 
 
-def convert_delta_actions_to_abs(env, states: np.ndarray, actions: np.ndarray, demo_attrs) -> np.ndarray:
+def convert_delta_actions_to_abs(env, states: np.ndarray, actions: np.ndarray) -> np.ndarray:
     d_a = len(env.env.robots[0].action_limits[0])
     stacked_actions = actions.reshape(*actions.shape[:-1], -1, d_a)
     action_goal_pos = np.zeros(stacked_actions.shape[:-1] + (3,), dtype=np.float32)
     action_goal_ori = np.zeros(stacked_actions.shape[:-1] + (3,), dtype=np.float32)
     action_remainder = stacked_actions[..., 6:].astype(np.float32)
 
-    initial_state = {"states": states[0]}
-    if "model_file" in demo_attrs:
-        initial_state["model"] = demo_attrs["model_file"]
-    if "ep_meta" in demo_attrs:
-        initial_state["ep_meta"] = demo_attrs["ep_meta"]
-
     for i, state in enumerate(states):
-        if i == 0:
-            env.reset_to(initial_state)
-        else:
-            env.reset_to({"states": state})
+        env.reset_to({"states": state})
         for robot_idx, robot in enumerate(env.env.robots):
             robot.control(stacked_actions[i, robot_idx], policy_step=True)
             action_goal_pos[i, robot_idx], action_goal_ori[i, robot_idx] = controller_goal(robot)
@@ -125,7 +116,7 @@ def repair_dataset(path: Path, qpos_env, action_env, env_args: str) -> None:
             if "actions_delta" not in demo:
                 demo.create_dataset("actions_delta", data=demo["actions"][:])
             delta_actions = demo["actions_delta"][:]
-            abs_actions = convert_delta_actions_to_abs(action_env, states, delta_actions, demo.attrs)
+            abs_actions = convert_delta_actions_to_abs(action_env, states, delta_actions)
             demo["actions"][:] = abs_actions
             values = collect_gripper_qpos(qpos_env, states)
             upsert_obs_pair(demo, "robot0_gripper_qpos", values)
