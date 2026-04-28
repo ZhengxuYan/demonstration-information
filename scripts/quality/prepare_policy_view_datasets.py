@@ -106,7 +106,7 @@ def install_lang_utils_stub() -> None:
     sys.modules[module_name] = stub
 
 
-def create_env(env_meta: dict, height: int, width: int):
+def create_env(env_meta: dict, height: int, width: int, camera_names: list[str] | None = None):
     install_lang_utils_stub()
 
     import robomimic.utils.env_utils as EnvUtils
@@ -116,7 +116,7 @@ def create_env(env_meta: dict, height: int, width: int):
     ObsUtils.initialize_obs_utils_with_obs_specs({"obs": {"low_dim": ["robot0_eef_pos"], "rgb": []}})
     return EnvUtils.create_env_for_data_processing(
         env_meta=env_meta,
-        camera_names=["agentview"],
+        camera_names=camera_names or ["agentview"],
         camera_height=height,
         camera_width=width,
         reward_shaping=False,
@@ -162,32 +162,104 @@ def set_left_close_low_pose(env) -> None:
     env.env.sim.forward()
 
 
-def render_left_close_low_images(env, states: np.ndarray, height: int, width: int) -> np.ndarray:
+def render_camera_images(env, states: np.ndarray, height: int, width: int, camera_name: str) -> np.ndarray:
     frames = []
-    set_left_close_low_pose(env)
     for state in states:
         # Avoid EnvRobosuite.reset_to here: it also materializes observations,
         # which can trigger an extra image render before our custom camera render.
         env.env.sim.set_state_from_flattened(state)
         env.env.sim.forward()
-        frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
+        frame = env.render(mode="rgb_array", height=height, width=width, camera_name=camera_name)
         frames.append(np.asarray(frame, dtype=np.uint8))
     return np.stack(frames, axis=0)
 
 
-def add_custom_view(demo_out, images: np.ndarray) -> None:
-    for group_name in ("obs", "next_obs"):
-        group = demo_out[group_name]
-        if "left_close_low_image" in group:
-            del group["left_close_low_image"]
-    demo_out["obs"].create_dataset("left_close_low_image", data=images, compression="gzip", compression_opts=1)
+def render_left_close_low_images(env, states: np.ndarray, height: int, width: int) -> np.ndarray:
+    set_left_close_low_pose(env)
+    return render_camera_images(env, states, height, width, "agentview")
+
+
+def upsert_image_pair(demo_out, key: str, images: np.ndarray) -> None:
+    obs = demo_out.require_group("obs")
+    next_obs = demo_out.require_group("next_obs")
+    for group in (obs, next_obs):
+        if key in group:
+            del group[key]
+    obs.create_dataset(key, data=images, compression="gzip", compression_opts=1)
     next_images = np.concatenate([images[1:], images[-1:]], axis=0)
-    demo_out["next_obs"].create_dataset(
-        "left_close_low_image",
-        data=next_images,
-        compression="gzip",
-        compression_opts=1,
-    )
+    next_obs.create_dataset(key, data=next_images, compression="gzip", compression_opts=1)
+
+
+def upsert_obs_pair(demo_out, key: str, values: np.ndarray) -> None:
+    obs = demo_out.require_group("obs")
+    next_obs = demo_out.require_group("next_obs")
+    for group in (obs, next_obs):
+        if key in group:
+            del group[key]
+    obs.create_dataset(key, data=values)
+    next_values = np.concatenate([values[1:], values[-1:]], axis=0)
+    next_obs.create_dataset(key, data=next_values)
+
+
+def ensure_required_obs_images(demo_out, env, states: np.ndarray, image_key: str, height: int, width: int) -> None:
+    obs = demo_out.get("obs")
+    has_image_key = obs is not None and image_key in obs
+    has_wrist = obs is not None and "robot0_eye_in_hand_image" in obs
+    if not has_image_key:
+        if image_key == "left_close_low_image":
+            images = render_left_close_low_images(env, states, height, width)
+        elif image_key == "agentview_image":
+            images = render_camera_images(env, states, height, width, "agentview")
+        else:
+            raise ValueError(f"Unsupported image key {image_key}")
+        upsert_image_pair(demo_out, image_key, images)
+    if not has_wrist:
+        images = render_camera_images(env, states, height, width, "robot0_eye_in_hand")
+        upsert_image_pair(demo_out, "robot0_eye_in_hand_image", images)
+
+
+def collect_lowdim_obs(env, states: np.ndarray) -> dict[str, np.ndarray]:
+    values = {
+        "robot0_eef_pos": [],
+        "robot0_eef_quat": [],
+        "robot0_gripper_qpos": [],
+    }
+    for state in states:
+        env.env.sim.set_state_from_flattened(state)
+        env.env.sim.forward()
+        obs = env.env._get_observations(force_update=True)
+        for key in values:
+            values[key].append(np.asarray(obs[key], dtype=np.float32))
+    return {key: np.stack(items, axis=0) for key, items in values.items()}
+
+
+def ensure_required_lowdim_obs(demo_out, env, states: np.ndarray) -> None:
+    obs = demo_out.get("obs")
+    required = ("robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
+    if obs is not None and all(key in obs for key in required):
+        return
+    lowdim = collect_lowdim_obs(env, states)
+    for key, values in lowdim.items():
+        upsert_obs_pair(demo_out, key, values)
+
+
+def load_env_meta(src, src_path: Path, fallback_path: Path | None) -> dict:
+    env_args = src["data"].attrs.get("env_args")
+    if env_args is None:
+        if fallback_path is None:
+            raise KeyError(f"{src_path} is missing data.attrs['env_args']")
+        with h5py.File(fallback_path, "r") as fallback:
+            env_args = fallback["data"].attrs["env_args"]
+    return json.loads(env_args)
+
+
+def source_needs_generated_obs(src, demo_key: str, image_key: str) -> bool:
+    demo = src["data"][demo_key]
+    if "obs" not in demo:
+        return True
+    obs = demo["obs"]
+    required = (image_key, "robot0_eye_in_hand_image", "robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
+    return any(key not in obs for key in required)
 
 
 def build_dataset(
@@ -216,15 +288,11 @@ def build_dataset(
         data_out = dst.create_group("data")
         copy_attrs(src["data"], data_out)
 
-        if add_left_close_low:
-            env_args = src["data"].attrs.get("env_args")
-            if env_args is None:
-                if env_meta_fallback_path is None:
-                    raise KeyError(f"{src_path} is missing data.attrs['env_args']")
-                with h5py.File(env_meta_fallback_path, "r") as fallback:
-                    env_args = fallback["data"].attrs["env_args"]
-            env_meta = json.loads(env_args)
-            env = create_env(env_meta, render_height, render_width)
+        image_key = "left_close_low_image" if add_left_close_low else "agentview_image"
+        needs_generated_obs = source_needs_generated_obs(src, src_demo_keys[demo_indices[0]], image_key)
+        if add_left_close_low or needs_generated_obs:
+            env_meta = load_env_meta(src, src_path, env_meta_fallback_path)
+            env = create_env(env_meta, render_height, render_width, ["agentview", "robot0_eye_in_hand"])
             env.reset()
 
         new_demo_keys = []
@@ -236,9 +304,10 @@ def build_dataset(
             new_demo_keys.append(new_key)
             demo_out = data_out.create_group(new_key)
             copy_group(src["data"][old_key], demo_out)
-            if add_left_close_low:
-                images = render_left_close_low_images(env, demo_out["states"][:], render_height, render_width)
-                add_custom_view(demo_out, images)
+            if add_left_close_low or needs_generated_obs:
+                states = demo_out["states"][:]
+                ensure_required_obs_images(demo_out, env, states, image_key, render_height, render_width)
+                ensure_required_lowdim_obs(demo_out, env, states)
 
         write_masks(dst, new_demo_keys)
         dst.attrs["source_path"] = str(src_path)
