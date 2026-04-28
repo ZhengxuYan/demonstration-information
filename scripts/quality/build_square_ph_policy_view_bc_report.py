@@ -398,6 +398,11 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
       const min=Math.min(...scores), max=Math.max(...scores), span=Math.max(1e-6,max-min);
       return scores.map((score,i)=>`${{i?'L':'M'}} ${{(left + steps[i]/xMax*(right-left)).toFixed(2)}} ${{(bottom - (score-min)/span*(bottom-top)).toFixed(2)}}`).join(' ');
     }}
+    function traceExtent(trace) {{
+      if (!trace || !trace.scores || !trace.scores.length) return {{min: NaN, max: NaN}};
+      const scores = smooth(trace.scores);
+      return {{min: Math.min(...scores), max: Math.max(...scores)}};
+    }}
     function scoreAt(trace, frame) {{
       if (!trace || !trace.steps || !trace.steps.length) return NaN;
       const scores = smooth(trace.scores);
@@ -448,10 +453,13 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     function plot(row, spec) {{
       const videoMeta = row.videos[spec.view];
       const id = `${{spec.key}}-${{row.ep_idx}}`;
+      const extent = traceExtent(row.traces[spec.key]);
       return `<div class="plot" data-spec="${{spec.key}}">
         <div class="plot-title"><span>${{spec.label}}</span><strong id="${{id}}">${{fmt(row.scores[spec.key])}}</strong></div>
         <svg viewBox="0 0 380 112" preserveAspectRatio="none">
           <line class="gridline" x1="35" y1="10" x2="345" y2="10"></line><line class="gridline" x1="35" y1="55" x2="345" y2="55"></line><line class="gridline" x1="35" y1="100" x2="345" y2="100"></line>
+          <text class="axis-label" x="3" y="14">${{fmt(extent.max)}}</text>
+          <text class="axis-label" x="3" y="103">${{fmt(extent.min)}}</text>
           <path class="line" stroke="${{DATA.colors[spec.key]}}" d="${{tracePath(row.traces[spec.key], videoMeta.num_frames)}}"></path>
           <line class="playhead" x1="35" x2="35" y1="10" y2="100"></line>
           <text class="axis-label" x="35" y="110">0</text><text class="axis-label" x="320" y="110">${{videoMeta.num_frames - 1}}</text>
