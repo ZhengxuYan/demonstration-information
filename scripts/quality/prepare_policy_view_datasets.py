@@ -192,6 +192,10 @@ def select_robot_value(value, arm: str):
     return value
 
 
+def as_index_list(value) -> list[int]:
+    return np.asarray(value).reshape(-1).astype(np.int64).tolist()
+
+
 def render_required_observations(
     env,
     states: np.ndarray,
@@ -224,7 +228,7 @@ def render_required_observations(
     arm = robot.arms[0] if getattr(robot, "arms", None) else "right"
     eef_site_id = select_robot_value(robot.eef_site_id, arm)
     eef_body_name = select_robot_value(robot.robot_model.eef_name, arm)
-    gripper_joint_pos_indexes = select_robot_value(robot._ref_gripper_joint_pos_indexes, arm)
+    gripper_joint_pos_indexes = as_index_list(select_robot_value(robot._ref_gripper_joint_pos_indexes, arm))
 
     for state in states:
         # Avoid EnvRobosuite.reset_to: it materializes observations and can
