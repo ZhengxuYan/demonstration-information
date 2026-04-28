@@ -63,6 +63,21 @@ COLORS = {
     "discrete_left_close_low_wrist": "#d78a40",
 }
 
+ALGO_GROUPS = [
+    {
+        "key": "GMM",
+        "label": "GMM transition NLL",
+        "agent_key": "gmm_agent_wrist",
+        "left_key": "gmm_left_close_low_wrist",
+    },
+    {
+        "key": "Discrete",
+        "label": "Discrete transition NLL",
+        "agent_key": "discrete_agent_wrist",
+        "left_key": "discrete_left_close_low_wrist",
+    },
+]
+
 WRIST_KEY = "robot0_eye_in_hand_image"
 
 
@@ -186,7 +201,7 @@ def write_video(path: Path, frames: np.ndarray, fps: int) -> None:
         "-",
         "-an",
         "-vf",
-        "scale=672:336:flags=neighbor",
+        "scale=1008:336:flags=neighbor",
         "-c:v",
         "libx264",
         "-preset",
@@ -202,33 +217,32 @@ def write_video(path: Path, frames: np.ndarray, fps: int) -> None:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
 
 
-def export_view_videos(data_root: Path, output_dir: Path, ep_indices: list[int], fps: int) -> dict[str, dict[int, dict[str, object]]]:
-    assets: dict[str, dict[int, dict[str, object]]] = {}
-    for spec in (SPECS[0], SPECS[1]):
-        view = spec["view"]
-        primary = spec["primary_image"]
-        dataset_path = data_root / spec["dataset"]
-        assets[view] = {}
-        with h5py.File(dataset_path, "r") as f:
-            for ep_idx in ep_indices:
-                demo = f["data"][f"demo_{ep_idx}"]
-                left = demo["obs"][primary][:]
-                right = demo["obs"][WRIST_KEY][:]
-                frames = np.concatenate([left, right], axis=2)
-                rel = Path("videos") / view / f"demo_{ep_idx:04d}.mp4"
-                write_video(output_dir / rel, frames, fps)
-                assets[view][ep_idx] = {
-                    "video": rel.as_posix(),
-                    "num_frames": int(len(frames)),
-                    "fps": fps,
-                }
+def export_three_view_videos(data_root: Path, output_dir: Path, ep_indices: list[int], fps: int) -> dict[int, dict[str, object]]:
+    assets: dict[int, dict[str, object]] = {}
+    agent_path = data_root / "square_ph_agent_wrist_image.hdf5"
+    left_path = data_root / "square_ph_left_close_low_wrist_image.hdf5"
+    with h5py.File(agent_path, "r") as agent_f, h5py.File(left_path, "r") as left_f:
+        for ep_idx in ep_indices:
+            agent_demo = agent_f["data"][f"demo_{ep_idx}"]
+            left_demo = left_f["data"][f"demo_{ep_idx}"]
+            agent_frames = agent_demo["obs"]["agentview_image"][:]
+            left_frames = left_demo["obs"]["left_close_low_image"][:]
+            wrist_frames = agent_demo["obs"][WRIST_KEY][:]
+            frames = np.concatenate([agent_frames, left_frames, wrist_frames], axis=2)
+            rel = Path("videos") / f"demo_{ep_idx:04d}.mp4"
+            write_video(output_dir / rel, frames, fps)
+            assets[ep_idx] = {
+                "video": rel.as_posix(),
+                "num_frames": int(len(frames)),
+                "fps": fps,
+            }
     return assets
 
 
 def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, object]], dict[str, object]]:
     bundles = {spec["key"]: load_score_bundle(args.scores_root / spec["score_file"], args.max_trace_points) for spec in SPECS}
     ep_indices = select_ep_indices(bundles, args.max_demos)
-    videos = export_view_videos(args.data_root, args.output_dir, ep_indices, args.fps)
+    videos = export_three_view_videos(args.data_root, args.output_dir, ep_indices, args.fps)
     annotations = load_annotations(args.annotations_csv)
     rows: list[dict[str, object]] = []
     for ep_idx in ep_indices:
@@ -240,10 +254,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, object]], dict[
                 "ep_idx": int(ep_idx),
                 "observability": annotation["observability"],
                 "annotation_note": annotation["annotation_note"],
-                "videos": {
-                    "agent_wrist": videos["agent_wrist"][ep_idx],
-                    "left_close_low_wrist": videos["left_close_low_wrist"][ep_idx],
-                },
+                "video": videos[ep_idx],
                 "scores": scores,
                 "traces": traces,
                 "gmm_gap": scores["gmm_left_close_low_wrist"] - scores["gmm_agent_wrist"],
@@ -302,7 +313,10 @@ def write_csv(rows: list[dict[str, object]], path: Path) -> None:
 
 def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str:
     payload = html.escape(
-        json.dumps({"rows": rows, "summary": summary, "specs": SPECS, "colors": COLORS}, separators=(",", ":")),
+        json.dumps(
+            {"rows": rows, "summary": summary, "specs": SPECS, "algoGroups": ALGO_GROUPS, "colors": COLORS},
+            separators=(",", ":"),
+        ),
         quote=False,
     )
     return f"""<!doctype html>
@@ -331,10 +345,9 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     .metric strong,.meta strong {{ font-size:18px; }}
     .cards {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(520px,1fr)); gap:16px; }}
     .card {{ overflow:hidden; }}
-    .videos {{ display:grid; grid-template-columns:1fr 1fr; background:#050403; gap:1px; }}
     .video-panel {{ position:relative; background:#050403; }}
     .video-panel span {{ position:absolute; left:8px; top:8px; z-index:1; border-radius:999px; padding:3px 7px; background:rgba(5,4,3,.7); color:#fffaf0; font-size:12px; }}
-    video {{ display:block; width:100%; aspect-ratio:2/1; object-fit:contain; background:#050403; }}
+    video {{ display:block; width:100%; aspect-ratio:3/1; object-fit:contain; background:#050403; }}
     .body {{ padding:13px 14px 16px; display:grid; gap:11px; }}
     .title {{ display:flex; justify-content:space-between; gap:10px; align-items:baseline; }}
     .pill {{ border-radius:999px; background:#ddeee8; padding:4px 8px; color:#17433f; font-size:12px; white-space:nowrap; }}
@@ -350,13 +363,13 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     .plots {{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }}
     .path {{ color:var(--muted); font-size:12px; word-break:break-all; }}
     .hidden {{ display:none!important; }}
-    @media (max-width:760px) {{ header,main {{ padding-left:14px; padding-right:14px; }} .cards,.plots,.videos {{ grid-template-columns:1fr; }} }}
+    @media (max-width:760px) {{ header,main {{ padding-left:14px; padding-right:14px; }} .cards,.plots {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
   <header>
     <h1>Square PH Policy-View BC Report</h1>
-    <p class="lede">Four finished BC runs scored by transition negative log likelihood. Videos show primary view and wrist camera side by side; traces are synchronized to video playback.</p>
+    <p class="lede">Four finished BC runs scored by transition negative log likelihood. Each video shows agentview, left-close-low, and wrist camera side by side; each plot overlays the two view-conditioned policies for one policy family.</p>
     <div class="toolbar">
       <select id="sort">
         <option value="worst">Sort highest NLL</option>
@@ -364,7 +377,6 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
         <option value="policy_gap">Sort largest GMM/discrete gap</option>
         <option value="demo">Sort demo id</option>
       </select>
-      <select id="view-filter"><option value="all">All views</option><option value="agent_wrist">Agent+wrist</option><option value="left_close_low_wrist">Left-close-low+wrist</option></select>
       <select id="policy-filter"><option value="all">All policies</option><option value="GMM">GMM</option><option value="Discrete">Discrete</option></select>
       <select id="observability-filter"><option value="all">All observability labels</option><option value="full">Full</option><option value="partial">Partial</option><option value="unlabeled">Unlabeled</option></select>
       <label>smooth <input id="smooth-window" type="number" min="1" max="101" step="2" value="9"></label>
@@ -380,6 +392,7 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     const DATA = JSON.parse(document.getElementById('payload').textContent);
     const fmt = v => Number.isFinite(v) ? v.toFixed(3) : 'n/a';
     const specs = DATA.specs;
+    const algoGroups = DATA.algoGroups;
     const cards = document.getElementById('cards');
     const summary = document.getElementById('summary');
     function smooth(values) {{
@@ -398,10 +411,22 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
       const min=Math.min(...scores), max=Math.max(...scores), span=Math.max(1e-6,max-min);
       return scores.map((score,i)=>`${{i?'L':'M'}} ${{(left + steps[i]/xMax*(right-left)).toFixed(2)}} ${{(bottom - (score-min)/span*(bottom-top)).toFixed(2)}}`).join(' ');
     }}
+    function pairedTracePath(trace, frames, min, max) {{
+      if (!trace || !trace.scores || !trace.scores.length) return '';
+      const scores = smooth(trace.scores), steps = trace.steps;
+      const left=35,right=345,top=10,bottom=100,xMax=Math.max(frames-1,...steps,1);
+      const span=Math.max(1e-6,max-min);
+      return scores.map((score,i)=>`${{i?'L':'M'}} ${{(left + steps[i]/xMax*(right-left)).toFixed(2)}} ${{(bottom - (score-min)/span*(bottom-top)).toFixed(2)}}`).join(' ');
+    }}
     function traceExtent(trace) {{
       if (!trace || !trace.scores || !trace.scores.length) return {{min: NaN, max: NaN}};
       const scores = smooth(trace.scores);
       return {{min: Math.min(...scores), max: Math.max(...scores)}};
+    }}
+    function pairedExtent(row, group) {{
+      const a = traceExtent(row.traces[group.agent_key]);
+      const l = traceExtent(row.traces[group.left_key]);
+      return {{min: Math.min(a.min, l.min), max: Math.max(a.max, l.max)}};
     }}
     function scoreAt(trace, frame) {{
       if (!trace || !trace.steps || !trace.steps.length) return NaN;
@@ -414,9 +439,12 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
       return scores[best];
     }}
     function visibleSpecs() {{
-      const view = document.getElementById('view-filter').value;
       const policy = document.getElementById('policy-filter').value;
-      return specs.filter(s => (view === 'all' || s.view === view) && (policy === 'all' || s.algo === policy));
+      return specs.filter(s => policy === 'all' || s.algo === policy);
+    }}
+    function visibleGroups() {{
+      const policy = document.getElementById('policy-filter').value;
+      return algoGroups.filter(group => policy === 'all' || group.key === policy);
     }}
     function renderSummary() {{
       const active = visibleSpecs();
@@ -450,17 +478,17 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
       }});
       return rows;
     }}
-    function plot(row, spec) {{
-      const videoMeta = row.videos[spec.view];
-      const id = `${{spec.key}}-${{row.ep_idx}}`;
-      const extent = traceExtent(row.traces[spec.key]);
-      return `<div class="plot" data-spec="${{spec.key}}">
-        <div class="plot-title"><span>${{spec.label}}</span><strong id="${{id}}">${{fmt(row.scores[spec.key])}}</strong></div>
+    function plot(row, group) {{
+      const videoMeta = row.video;
+      const extent = pairedExtent(row, group);
+      return `<div class="plot" data-group="${{group.key}}">
+        <div class="plot-title"><span>${{group.label}}</span><strong><span style="color:${{DATA.colors[group.agent_key]}}">agent ${{fmt(row.scores[group.agent_key])}}</span> · <span style="color:${{DATA.colors[group.left_key]}}">left ${{fmt(row.scores[group.left_key])}}</span></strong></div>
         <svg viewBox="0 0 380 112" preserveAspectRatio="none">
           <line class="gridline" x1="35" y1="10" x2="345" y2="10"></line><line class="gridline" x1="35" y1="55" x2="345" y2="55"></line><line class="gridline" x1="35" y1="100" x2="345" y2="100"></line>
           <text class="axis-label" x="3" y="14">${{fmt(extent.max)}}</text>
           <text class="axis-label" x="3" y="103">${{fmt(extent.min)}}</text>
-          <path class="line" stroke="${{DATA.colors[spec.key]}}" d="${{tracePath(row.traces[spec.key], videoMeta.num_frames)}}"></path>
+          <path class="line" stroke="${{DATA.colors[group.agent_key]}}" d="${{pairedTracePath(row.traces[group.agent_key], videoMeta.num_frames, extent.min, extent.max)}}"></path>
+          <path class="line" stroke="${{DATA.colors[group.left_key]}}" d="${{pairedTracePath(row.traces[group.left_key], videoMeta.num_frames, extent.min, extent.max)}}"></path>
           <line class="playhead" x1="35" x2="35" y1="10" y2="100"></line>
           <text class="axis-label" x="35" y="110">0</text><text class="axis-label" x="320" y="110">${{videoMeta.num_frames - 1}}</text>
         </svg>
@@ -468,47 +496,44 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     }}
     function render() {{
       const active = visibleSpecs();
+      const activeGroups = visibleGroups();
       renderSummary();
       cards.innerHTML = sortedRows().map(row => {{
         const pill = row.observability === 'partial' ? 'partial' : row.observability === 'unlabeled' ? 'unlabeled' : '';
         return `<article class="card" data-ep-idx="${{row.ep_idx}}">
-          <div class="videos">
-            <div class="video-panel"><span>agent + wrist</span><video data-view="agent_wrist" src="${{row.videos.agent_wrist.video}}" controls preload="metadata"></video></div>
-            <div class="video-panel"><span>left-close-low + wrist</span><video data-view="left_close_low_wrist" src="${{row.videos.left_close_low_wrist.video}}" controls preload="metadata"></video></div>
+          <div class="video-panel">
+            <span>agentview | left-close-low | wrist</span>
+            <video src="${{row.video.video}}" controls preload="metadata"></video>
           </div>
           <div class="body">
             <div class="title"><strong>demo_${{String(row.ep_idx).padStart(4,'0')}}</strong><span class="pill ${{pill}}">${{row.observability}}</span></div>
             <div class="score-grid">${{active.map(s => `<div class="metric"><span>${{s.label}}</span><strong style="color:${{DATA.colors[s.key]}}">${{fmt(row.scores[s.key])}}</strong></div>`).join('')}}</div>
-            <div class="plots">${{active.map(s => plot(row, s)).join('')}}</div>
+            <div class="plots">${{activeGroups.map(group => plot(row, group)).join('')}}</div>
             ${{row.annotation_note ? `<div class="path">note: ${{row.annotation_note}}</div>` : ''}}
           </div>
         </article>`;
       }}).join('');
       sync();
     }}
-    function update(card, view) {{
+    function update(card) {{
       const row = DATA.rows.find(r => r.ep_idx === Number(card.dataset.epIdx));
-      const video = card.querySelector(`video[data-view="${{view}}"]`);
+      const video = card.querySelector('video');
       if (!row || !video) return;
-      const meta = row.videos[view], frame = Math.min(meta.num_frames - 1, Math.max(0, Math.round(video.currentTime * (meta.fps || 20))));
+      const meta = row.video, frame = Math.min(meta.num_frames - 1, Math.max(0, Math.round(video.currentTime * (meta.fps || 20))));
       const x = 35 + frame / Math.max(1, meta.num_frames - 1) * (345 - 35);
-      specs.filter(s => s.view === view).forEach(s => {{
-        const plotEl = card.querySelector(`.plot[data-spec="${{s.key}}"]`);
-        if (!plotEl) return;
+      card.querySelectorAll('.plot').forEach(plotEl => {{
         plotEl.querySelectorAll('.playhead').forEach(head => {{ head.setAttribute('x1', x); head.setAttribute('x2', x); }});
-        const readout = card.querySelector(`#${{s.key}}-${{row.ep_idx}}`);
-        if (readout) readout.textContent = fmt(scoreAt(row.traces[s.key], frame));
       }});
     }}
     function sync() {{
       document.querySelectorAll('.card').forEach(card => {{
-        card.querySelectorAll('video').forEach(video => {{
-          const fn = () => update(card, video.dataset.view);
-          video.addEventListener('loadedmetadata', fn); video.addEventListener('timeupdate', fn); video.addEventListener('seeked', fn); fn();
-        }});
+        const video = card.querySelector('video');
+        if (!video) return;
+        const fn = () => update(card);
+        video.addEventListener('loadedmetadata', fn); video.addEventListener('timeupdate', fn); video.addEventListener('seeked', fn); fn();
       }});
     }}
-    ['sort','view-filter','policy-filter','observability-filter','smooth-window'].forEach(id => document.getElementById(id).addEventListener('change', render));
+    ['sort','policy-filter','observability-filter','smooth-window'].forEach(id => document.getElementById(id).addEventListener('change', render));
     document.getElementById('search').addEventListener('input', render);
     render();
   </script>
