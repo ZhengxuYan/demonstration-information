@@ -306,13 +306,18 @@ def ensure_required_observations(demo_out, env, states: np.ndarray, image_key: s
         upsert_obs_pair(demo_out, key, values)
 
 
-def load_env_meta(src, src_path: Path, fallback_path: Path | None) -> dict:
+def load_env_args(src, src_path: Path, fallback_path: Path | None) -> str:
     env_args = src["data"].attrs.get("env_args")
     if env_args is None:
         if fallback_path is None:
             raise KeyError(f"{src_path} is missing data.attrs['env_args']")
         with h5py.File(fallback_path, "r") as fallback:
             env_args = fallback["data"].attrs["env_args"]
+    return env_args
+
+
+def load_env_meta(src, src_path: Path, fallback_path: Path | None) -> dict:
+    env_args = load_env_args(src, src_path, fallback_path)
     return json.loads(env_args)
 
 
@@ -350,6 +355,8 @@ def build_dataset(
             demo_indices = list(range(len(src_demo_keys)))
         data_out = dst.create_group("data")
         copy_attrs(src["data"], data_out)
+        if env_meta_fallback_path is not None and "env_args" not in data_out.attrs:
+            data_out.attrs["env_args"] = load_env_args(src, src_path, env_meta_fallback_path)
 
         image_key = "left_close_low_image" if add_left_close_low else "agentview_image"
         needs_generated_obs = source_needs_generated_obs(src, src_demo_keys[demo_indices[0]], image_key)

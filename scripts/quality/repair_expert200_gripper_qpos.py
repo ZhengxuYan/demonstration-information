@@ -43,6 +43,11 @@ def load_env_meta(path: Path) -> dict:
         return json.loads(f["data"].attrs["env_args"])
 
 
+def load_env_args(path: Path) -> str:
+    with h5py.File(path, "r") as f:
+        return f["data"].attrs["env_args"]
+
+
 def collect_gripper_qpos(env, states: np.ndarray) -> np.ndarray:
     robot = env.env.robots[0]
     arm = robot.arms[0] if getattr(robot, "arms", None) else "right"
@@ -55,8 +60,9 @@ def collect_gripper_qpos(env, states: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype=np.float32)
 
 
-def repair_dataset(path: Path, env) -> None:
+def repair_dataset(path: Path, env, env_args: str) -> None:
     with h5py.File(path, "r+") as f:
+        f["data"].attrs["env_args"] = env_args
         for demo_key in tqdm(sorted_demo_keys(f["data"]), desc=f"repairing {path.name}"):
             demo = f["data"][demo_key]
             values = collect_gripper_qpos(env, demo["states"][:])
@@ -65,10 +71,11 @@ def repair_dataset(path: Path, env) -> None:
 
 def main() -> None:
     args = parse_args()
-    env = create_env(load_env_meta(args.env_meta_source), args.render_height, args.render_width, ["agentview"])
+    env_args = load_env_args(args.env_meta_source)
+    env = create_env(json.loads(env_args), args.render_height, args.render_width, ["agentview"])
     env.reset()
-    repair_dataset(args.agent_dataset, env)
-    repair_dataset(args.left_dataset, env)
+    repair_dataset(args.agent_dataset, env, env_args)
+    repair_dataset(args.left_dataset, env, env_args)
 
 
 if __name__ == "__main__":
