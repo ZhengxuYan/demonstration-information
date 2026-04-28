@@ -44,6 +44,13 @@ fi
 
 python scripts/quality/prepare_policy_view_datasets.py "${TARGET}" --overwrite "${EXTRA_ARGS[@]}"
 
+COMMON_OBS_SHAPE_ARGS=(
+  --expected-obs-shape robot0_eye_in_hand_image=84,84,3
+  --expected-obs-shape robot0_eef_pos=3
+  --expected-obs-shape robot0_eef_quat=4
+  --expected-obs-shape robot0_gripper_qpos=2
+)
+
 if [[ "${TARGET}" == "ph" ]]; then
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/square_ph/square_ph_agent_wrist_image.hdf5 \
@@ -53,7 +60,9 @@ if [[ "${TARGET}" == "ph" ]]; then
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape agentview_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/square_ph/square_ph_left_close_low_wrist_image.hdf5 \
     --expected-demos 200 \
@@ -62,7 +71,9 @@ if [[ "${TARGET}" == "ph" ]]; then
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape left_close_low_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/square_ph/square_ph_agent_wrist_image_abs_50_seed42.hdf5 \
     --expected-demos 50 \
@@ -71,7 +82,9 @@ if [[ "${TARGET}" == "ph" ]]; then
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape agentview_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/square_ph/square_ph_left_close_low_wrist_image_abs_50_seed42.hdf5 \
     --expected-demos 50 \
@@ -80,7 +93,9 @@ if [[ "${TARGET}" == "ph" ]]; then
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape left_close_low_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
 else
   EXPECTED_EXPERT_DEMOS="${EXPERT200_NUM_DEMOS:-212}"
   python scripts/quality/verify_policy_view_dataset.py \
@@ -91,7 +106,9 @@ else
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape agentview_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/expert200/expert200_left_close_low_wrist_image_abs.hdf5 \
     --expected-demos "${EXPECTED_EXPERT_DEMOS}" \
@@ -100,5 +117,7 @@ else
     --required-obs-key robot0_eye_in_hand_image \
     --required-obs-key robot0_eef_pos \
     --required-obs-key robot0_eef_quat \
-    --required-obs-key robot0_gripper_qpos
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape left_close_low_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
 fi
