@@ -194,6 +194,8 @@ def render_required_observations(
     need_wrist: bool,
     need_lowdim: bool,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    import robosuite.utils.transform_utils as T
+
     image_values: dict[str, list[np.ndarray]] = {}
     lowdim_values: dict[str, list[np.ndarray]] = {}
     if need_image_key:
@@ -210,6 +212,8 @@ def render_required_observations(
     cam_id = env.env.sim.model.camera_name2id("agentview")
     original_agent_pos = env.env.sim.model.cam_pos[cam_id].copy()
     original_agent_quat = env.env.sim.model.cam_quat[cam_id].copy()
+    robot = env.env.robots[0]
+    arm = robot.arms[0] if getattr(robot, "arms", None) else "right"
 
     for state in states:
         # Avoid EnvRobosuite.reset_to: it materializes observations and can
@@ -218,9 +222,16 @@ def render_required_observations(
         env.env.sim.forward()
 
         if need_lowdim:
-            raw_obs = env.env._get_observations(force_update=True)
-            for key in lowdim_values:
-                lowdim_values[key].append(np.asarray(raw_obs[key], dtype=np.float32))
+            eef_pos = np.asarray(env.env.sim.data.site_xpos[robot.eef_site_id[arm]], dtype=np.float32)
+            eef_quat = T.convert_quat(env.env.sim.data.get_body_xquat(robot.robot_model.eef_name[arm]), to="xyzw")
+            eef_quat = np.asarray(eef_quat, dtype=np.float32)
+            gripper_qpos = np.asarray(
+                [env.env.sim.data.qpos[index] for index in robot._ref_gripper_joint_pos_indexes[arm]],
+                dtype=np.float32,
+            )
+            lowdim_values["robot0_eef_pos"].append(eef_pos)
+            lowdim_values["robot0_eef_quat"].append(eef_quat)
+            lowdim_values["robot0_gripper_qpos"].append(gripper_qpos)
 
         if need_image_key and image_key == "agentview_image":
             frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
