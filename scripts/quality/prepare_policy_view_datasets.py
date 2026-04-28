@@ -375,7 +375,16 @@ def prepare_expert200(args: argparse.Namespace) -> None:
     selected = list(range(min(selected_count, num_demos)))
     if num_demos != selected_count:
         print(f"expert200 source has {num_demos} demos; using first {len(selected)} demos")
-    build_dataset(src, out / "expert200_agent_wrist_image_abs.hdf5", selected, False, args.render_height, args.render_width, args.overwrite)
+    build_dataset(
+        src,
+        out / "expert200_agent_wrist_image_abs.hdf5",
+        selected,
+        False,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+        env_meta_fallback_path=args.ph_image_abs,
+    )
     build_dataset(
         src,
         out / "expert200_left_close_low_wrist_image_abs.hdf5",
