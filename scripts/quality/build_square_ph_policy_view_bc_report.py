@@ -272,6 +272,16 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, object]], dict[
             "dataset": str(args.data_root / spec["dataset"]),
             "score_file": str(args.scores_root / spec["score_file"]),
             "nll": metric([float(row["scores"][spec["key"]]) for row in rows]),
+            "by_observability": {
+                label: metric(
+                    [
+                        float(row["scores"][spec["key"]])
+                        for row in rows
+                        if row["observability"] == label
+                    ]
+                )
+                for label in ("full", "partial", "unlabeled")
+            },
         }
         for spec in SPECS
     }
@@ -340,6 +350,11 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
     .summary-card {{ padding:15px; border-top:5px solid var(--accent); }}
     .summary-card h2 {{ margin:0 0 9px; font-size:18px; }}
     .summary-grid,.score-grid {{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }}
+    .bucket-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-top:9px; }}
+    .bucket {{ border:1px solid var(--border); border-radius:12px; padding:8px; background:#fffdf7; }}
+    .bucket span {{ display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.055em; }}
+    .bucket strong {{ display:block; font-size:16px; }}
+    .bucket em {{ display:block; color:var(--muted); font-size:12px; font-style:normal; }}
     .metric {{ border:1px solid var(--border); border-radius:12px; padding:8px; background:#fffdf7; }}
     .metric span,.meta span {{ display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.055em; }}
     .metric strong,.meta strong {{ font-size:18px; }}
@@ -450,6 +465,11 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
       const active = visibleSpecs();
       summary.innerHTML = active.map(s => {{
         const m = DATA.summary[s.key].nll;
+        const buckets = DATA.summary[s.key].by_observability || {{}};
+        const bucketHtml = ['full', 'partial', 'unlabeled'].map(label => {{
+          const stats = buckets[label] || {{}};
+          return `<div class="bucket"><span>${{label}}</span><strong>${{fmt(stats.mean)}}</strong><em>std ${{fmt(stats.std)}}</em></div>`;
+        }}).join('');
         return `<article class="summary-card" style="--accent:${{DATA.colors[s.key]}}">
           <h2>${{s.label}}</h2>
           <div class="summary-grid">
@@ -458,6 +478,7 @@ def build_html(rows: list[dict[str, object]], summary: dict[str, object]) -> str
             <div class="metric"><span>min</span><strong>${{fmt(m.min)}}</strong></div>
             <div class="metric"><span>max</span><strong>${{fmt(m.max)}}</strong></div>
           </div>
+          <div class="bucket-grid">${{bucketHtml}}</div>
           <p class="path">${{DATA.summary[s.key].dataset}}</p>
         </article>`;
       }}).join('');
