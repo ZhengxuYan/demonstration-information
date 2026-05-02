@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a static report for Square PH Diffusion Policy view experiments."""
+"""Build a static report for Diffusion Policy policy-view experiments."""
 
 from __future__ import annotations
 
@@ -11,30 +11,65 @@ import shutil
 from pathlib import Path
 
 
-RUNS = [
-    {
-        "key": "agent_wrist",
-        "label": "DP / agent+wrist",
-        "dir": "square_ph_dp_agent_wrist_abs_50_seed42",
-        "color": "#0f6d67",
+RUN_SETS = {
+    "square_ph": {
+        "title": "Square PH Diffusion Policy View Report",
+        "lede": (
+            "Two finished DP runs compared by rollout success, training curves, checkpoints, "
+            "and generated rollout media. This page reports policy performance rather than likelihood."
+        ),
+        "output_dir": "square_ph_policy_view_dp_report",
+        "json_name": "square_ph_policy_view_dp_report.json",
+        "runs": [
+            {
+                "key": "agent_wrist",
+                "label": "DP / agent+wrist",
+                "dir": "square_ph_dp_agent_wrist_abs_50_seed42",
+                "color": "#0f6d67",
+            },
+            {
+                "key": "left_close_low_wrist",
+                "label": "DP / left-close-low+wrist",
+                "dir": "square_ph_dp_left_close_low_wrist_abs_50_seed42",
+                "color": "#b54a2a",
+            },
+        ],
     },
-    {
-        "key": "left_close_low_wrist",
-        "label": "DP / left-close-low+wrist",
-        "dir": "square_ph_dp_left_close_low_wrist_abs_50_seed42",
-        "color": "#b54a2a",
+    "expert200": {
+        "title": "Expert200 Diffusion Policy View Report",
+        "lede": (
+            "Two expert200 DP runs compared by rollout success, training curves, checkpoints, "
+            "and generated rollout media after converting actions to the robomimic absolute-action convention."
+        ),
+        "output_dir": "expert200_policy_view_dp_report",
+        "json_name": "expert200_policy_view_dp_report.json",
+        "runs": [
+            {
+                "key": "agent_wrist",
+                "label": "Expert200 DP / agent+wrist",
+                "dir": "expert200_dp_agent_wrist_abs_212",
+                "color": "#0f6d67",
+            },
+            {
+                "key": "left_close_low_wrist",
+                "label": "Expert200 DP / left-close-low+wrist",
+                "dir": "expert200_dp_left_close_low_wrist_abs_212",
+                "color": "#b54a2a",
+            },
+        ],
     },
-]
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-set", choices=sorted(RUN_SETS), default="square_ph")
     parser.add_argument(
         "--outputs-root",
         type=Path,
         default=Path("/iris/u/jasonyan/data/diffusion_policy_outputs/policy_view_experiments"),
     )
-    parser.add_argument("--output-dir", type=Path, default=Path("square_ph_policy_view_dp_report"))
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--max-videos", type=int, default=28)
     return parser.parse_args()
 
@@ -100,7 +135,10 @@ def copy_videos(run_dir: Path, output_dir: Path, run_key: str, max_videos: int) 
 
 def load_run(args: argparse.Namespace, spec: dict[str, str]) -> dict[str, object]:
     run_dir = args.outputs_root / spec["dir"]
-    logs = read_json_lines(run_dir / "logs.json.txt")
+    logs_path = run_dir / "logs.json.txt"
+    if not logs_path.exists():
+        raise FileNotFoundError(f"missing DP log file: {logs_path}")
+    logs = read_json_lines(logs_path)
     checkpoints = sorted((run_dir / "checkpoints").glob("*.ckpt"))
     best = sorted(
         [ckpt for ckpt in checkpoints if checkpoint_score(ckpt) is not None],
@@ -131,14 +169,14 @@ def load_run(args: argparse.Namespace, spec: dict[str, str]) -> dict[str, object
     }
 
 
-def build_html(runs: list[dict[str, object]]) -> str:
+def build_html(runs: list[dict[str, object]], title: str, lede: str) -> str:
     payload = html.escape(json.dumps({"runs": runs}, separators=(",", ":")), quote=False)
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Square PH Diffusion Policy View Report</title>
+  <title>{html.escape(title)}</title>
   <style>
     :root {{ --bg:#e7ece5; --panel:#fbfbf2; --ink:#18201b; --muted:#657064; --border:#ccd5c8; --shadow:rgba(24,32,27,.1); }}
     * {{ box-sizing:border-box; }}
@@ -173,8 +211,8 @@ def build_html(runs: list[dict[str, object]]) -> str:
 </head>
 <body>
   <header>
-    <h1>Square PH Diffusion Policy View Report</h1>
-    <p class="lede">Two finished DP runs compared by rollout success, training curves, checkpoints, and generated rollout media. This page reports policy performance rather than likelihood.</p>
+    <h1>{html.escape(title)}</h1>
+    <p class="lede">{html.escape(lede)}</p>
   </header>
   <main>
     <section class="summary" id="summary"></section>
@@ -243,12 +281,16 @@ def build_html(runs: list[dict[str, object]]) -> str:
 
 def main() -> None:
     args = parse_args()
+    run_set = RUN_SETS[args.run_set]
+    if args.output_dir is None:
+        args.output_dir = Path(str(run_set["output_dir"]))
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    runs = [load_run(args, spec) for spec in RUNS]
-    (args.output_dir / "index.html").write_text(build_html(runs))
-    (args.output_dir / "square_ph_policy_view_dp_report.json").write_text(json.dumps({"runs": runs}, indent=2) + "\n")
+    runs = [load_run(args, spec) for spec in run_set["runs"]]
+    json_path = args.output_dir / str(run_set["json_name"])
+    (args.output_dir / "index.html").write_text(build_html(runs, str(run_set["title"]), str(run_set["lede"])))
+    json_path.write_text(json.dumps({"runs": runs}, indent=2) + "\n")
     print(f"wrote {args.output_dir / 'index.html'}")
-    print(f"wrote {args.output_dir / 'square_ph_policy_view_dp_report.json'}")
+    print(f"wrote {json_path}")
 
 
 if __name__ == "__main__":

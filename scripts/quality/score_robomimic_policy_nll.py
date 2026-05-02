@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--dataset", type=Path, required=True, help="Path to robomimic image.hdf5 dataset.")
     parser.add_argument("--output", type=Path, required=True, help="Output directory.")
     parser.add_argument("--name", type=str, required=True, help="Output stem, e.g. gmm or discrete.")
+    parser.add_argument("--filter-key", type=str, default=None, help="Optional HDF5 mask key, e.g. train or valid.")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cuda or cpu.")
@@ -89,8 +90,8 @@ def index_metadata(dataset, indices: np.ndarray):
     return np.asarray(ep_idxs), np.asarray(step_idxs), np.asarray(demo_keys)
 
 
-def make_loader(config, batch_size: int, num_workers: int):
-    dataset = dataset_factory(config, obs_keys=list(config.all_obs_keys), filter_by_attribute=None)
+def make_loader(config, batch_size: int, num_workers: int, filter_key: str | None = None):
+    dataset = dataset_factory(config, obs_keys=list(config.all_obs_keys), filter_by_attribute=filter_key)
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -152,6 +153,7 @@ def score(algo, config, dataset, loader):
             "seq_length": int(config.train.seq_length),
             "all_obs_keys": list(config.all_obs_keys),
         },
+        "filter_key": getattr(dataset, "filter_by_attribute", None),
     }
 
 
@@ -173,7 +175,7 @@ def main():
         device = torch.device(args.device)
 
     algo, config = load_algo(args.checkpoint, args.dataset, device)
-    dataset, loader = make_loader(config, args.batch_size, args.num_workers)
+    dataset, loader = make_loader(config, args.batch_size, args.num_workers, args.filter_key)
     scores = score(algo, config, dataset, loader)
 
     pkl_path = args.output / f"{args.name}.pkl"

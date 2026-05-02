@@ -23,7 +23,7 @@ LEFT_CLOSE_LOW_QUAT_WXYZ = np.asarray([0.81392215, 0.36066498, 0.18452251, 0.416
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("dataset", choices=["ph", "expert200"])
+    parser.add_argument("dataset", choices=["ph", "expert200", "random_post"])
     parser.add_argument("--out-root", type=Path, default=Path("/iris/u/jasonyan/data/policy_view_experiments"))
     parser.add_argument(
         "--ph-image",
@@ -38,8 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert200-zip", type=Path, default=None)
     parser.add_argument("--expert200-source", type=Path, default=None)
     parser.add_argument("--expert200-num-demos", type=int, default=None)
+    parser.add_argument("--random-post-image", type=Path, default=None)
+    parser.add_argument("--random-post-name", type=str, default="random_post")
     parser.add_argument("--ph-dp-num-demos", type=int, default=50)
     parser.add_argument("--ph-dp-seed", type=int, default=42)
+    parser.add_argument("--valid-ratio", type=float, default=0.0)
+    parser.add_argument("--split-seed", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--render-height", type=int, default=84)
     parser.add_argument("--render-width", type=int, default=84)
@@ -65,11 +69,27 @@ def copy_group(src, dst) -> None:
             src.copy(item, dst, name=key)
 
 
-def write_masks(out_file: h5py.File, new_demo_keys: list[str]) -> None:
+def write_masks(out_file: h5py.File, new_demo_keys: list[str], valid_ratio: float = 0.0, seed: int = 0) -> None:
+    if not 0.0 <= valid_ratio < 1.0:
+        raise ValueError(f"valid_ratio must be in [0, 1); got {valid_ratio}")
+
+    if valid_ratio > 0 and len(new_demo_keys) > 1:
+        rng = np.random.default_rng(seed)
+        num_valid = max(1, int(round(valid_ratio * len(new_demo_keys))))
+        valid_indexes = set(rng.choice(np.arange(len(new_demo_keys)), size=num_valid, replace=False).astype(int).tolist())
+        train_keys = [key for idx, key in enumerate(new_demo_keys) if idx not in valid_indexes]
+        valid_keys = [key for idx, key in enumerate(new_demo_keys) if idx in valid_indexes]
+    else:
+        train_keys = list(new_demo_keys)
+        valid_keys = []
+
     mask = out_file.create_group("mask")
-    encoded = np.asarray([key.encode("utf-8") for key in new_demo_keys])
-    mask.create_dataset("train", data=encoded)
-    mask.create_dataset("valid", data=np.asarray([], dtype=encoded.dtype))
+    encoded_train = np.asarray([key.encode("utf-8") for key in train_keys], dtype="S")
+    encoded_valid = np.asarray([key.encode("utf-8") for key in valid_keys], dtype=encoded_train.dtype)
+    mask.create_dataset("train", data=encoded_train)
+    mask.create_dataset("valid", data=encoded_valid)
+    out_file.attrs["mask_split_seed"] = int(seed)
+    out_file.attrs["mask_valid_ratio"] = float(valid_ratio)
 
 
 def selected_demo_indices(num_demos: int, count: int, seed: int) -> list[int]:
@@ -339,6 +359,8 @@ def build_dataset(
     render_width: int,
     overwrite: bool,
     env_meta_fallback_path: Path | None = None,
+    valid_ratio: float = 0.0,
+    split_seed: int = 0,
 ) -> None:
     if dst_path.exists():
         if not overwrite:
@@ -378,7 +400,7 @@ def build_dataset(
                 states = demo_out["states"][:]
                 ensure_required_observations(demo_out, env, states, image_key, render_height, render_width)
 
-        write_masks(dst, new_demo_keys)
+        write_masks(dst, new_demo_keys, valid_ratio=valid_ratio, seed=split_seed)
         dst.attrs["source_path"] = str(src_path)
         dst.attrs["demo_key_mapping_json"] = json.dumps(mapping, sort_keys=True)
         dst.attrs["left_close_low_pos"] = LEFT_CLOSE_LOW_POS
@@ -466,12 +488,54 @@ def prepare_expert200(args: argparse.Namespace) -> None:
     )
 
 
+def find_random_post_source(args: argparse.Namespace) -> Path:
+    value = args.random_post_image or os.environ.get("RANDOM_POST_IMAGE_HDF5")
+    if value is None:
+        raise FileNotFoundError("Provide --random-post-image or set RANDOM_POST_IMAGE_HDF5")
+    path = Path(value)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
+
+
+def prepare_random_post(args: argparse.Namespace) -> None:
+    out = args.out_root / args.random_post_name
+    src = find_random_post_source(args)
+    validate_source(src, expected_action_dim=7)
+    build_dataset(
+        src,
+        out / f"{args.random_post_name}_agent_wrist_image.hdf5",
+        None,
+        False,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+        env_meta_fallback_path=args.ph_image,
+        valid_ratio=args.valid_ratio,
+        split_seed=args.split_seed,
+    )
+    build_dataset(
+        src,
+        out / f"{args.random_post_name}_left_close_low_wrist_image.hdf5",
+        None,
+        True,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+        env_meta_fallback_path=args.ph_image,
+        valid_ratio=args.valid_ratio,
+        split_seed=args.split_seed,
+    )
+
+
 def main() -> None:
     args = parse_args()
     if args.dataset == "ph":
         prepare_ph(args)
-    else:
+    elif args.dataset == "expert200":
         prepare_expert200(args)
+    else:
+        prepare_random_post(args)
 
 
 if __name__ == "__main__":
