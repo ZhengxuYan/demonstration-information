@@ -41,6 +41,10 @@ split_seed = int("${SPLIT_SEED}")
 for path in paths:
     with h5py.File(path, "r+") as f:
         demos = sorted(f["data"].keys(), key=lambda name: int(name.split("_")[-1]))
+        for demo in demos:
+            demo_group = f["data"][demo]
+            if "num_samples" not in demo_group.attrs:
+                demo_group.attrs["num_samples"] = int(demo_group["actions"].shape[0])
         rng = np.random.default_rng(split_seed)
         num_valid = max(1, int(round(valid_ratio * len(demos)))) if len(demos) > 1 else 0
         valid_idx = set(rng.choice(np.arange(len(demos)), size=num_valid, replace=False).astype(int).tolist())
