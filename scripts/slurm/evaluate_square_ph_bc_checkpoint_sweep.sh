@@ -26,7 +26,8 @@ if [[ "${VIEW}" != "agent_wrist" && "${VIEW}" != "left_close_low_wrist" ]]; then
 fi
 
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
-conda activate openx
+CONDA_ENV="${CONDA_ENV:-openx}"
+conda activate "${CONDA_ENV}"
 
 REPO=/iris/u/jasonyan/repos/demonstration-information
 CKPT_ROOT="${CKPT_ROOT:-/iris/u/jasonyan/data/robomimic_outputs/policy_view_experiments}"
@@ -47,6 +48,11 @@ export MUJOCO_GL=egl
 export PYTHONPATH="${REPO}/robomimic:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=2
+
+python - <<'PY'
+import robosuite
+print("robosuite", getattr(robosuite, "__version__", "unknown"))
+PY
 
 mapfile -t ALL_CKPTS < <(find "${RUN_ROOT}" -path "*/models/model_epoch_*.pth" -type f | sort -V)
 if [[ "${#ALL_CKPTS[@]}" -eq 0 ]]; then
@@ -80,6 +86,7 @@ if [[ "${VIEW}" == "left_close_low_wrist" ]]; then
 fi
 
 printf 'run %s\n' "${RUN_NAME}"
+printf 'conda_env %s\n' "${CONDA_ENV}"
 printf 'n_rollouts %s horizon %s seed %s\n' "${N_ROLLOUTS}" "${HORIZON}" "${SEED}"
 printf 'checkpoints %s\n' "${#CKPTS[@]}"
 printf '%s\n' "${CKPTS[@]}"
