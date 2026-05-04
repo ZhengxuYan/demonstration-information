@@ -178,21 +178,27 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
             demos = [elem.decode("utf-8") for elem in np.array(f["mask/valid"][:])]
 
         for demo in demos:
-            demo_length = f["data"][demo]["dones"].shape[0]
+            demo_group = f["data"][demo]
+            demo_length = demo_group["actions"].shape[0]
+            rewards = (
+                demo_group["rewards"][:].astype(np.float32)
+                if "rewards" in demo_group
+                else np.zeros(demo_length, dtype=np.float32)
+            )
             padded_object_state = np.zeros((demo_length, OBJECT_STATE_SIZE), dtype=np.float32)
-            object_state = f["data"][demo]["obs"]["object"][:].astype(np.float32)
+            object_state = demo_group["obs"]["object"][:].astype(np.float32)
             padded_object_state[:, : object_state.shape[-1]] = object_state
             data = dict(
-                action=f["data"][demo]["actions"][:].astype(np.float32),
+                action=demo_group["actions"][:].astype(np.float32),
                 observation=dict(
-                    agent_image=f["data"][demo]["obs"]["agentview_image"][:],
-                    wrist_image=f["data"][demo]["obs"]["robot0_eye_in_hand_image"][:],
+                    agent_image=demo_group["obs"]["agentview_image"][:],
+                    wrist_image=demo_group["obs"]["robot0_eye_in_hand_image"][:],
                     state=dict(
-                        ee_pos=f["data"][demo]["obs"]["robot0_eef_pos"][:].astype(np.float32),
-                        ee_quat=f["data"][demo]["obs"]["robot0_eef_quat"][:].astype(np.float32),
-                        gripper_qpos=f["data"][demo]["obs"]["robot0_gripper_qpos"][:].astype(np.float32),
-                        joint_pos=f["data"][demo]["obs"]["robot0_joint_pos"][:].astype(np.float32),
-                        joint_vel=f["data"][demo]["obs"]["robot0_joint_vel"][:].astype(np.float32),
+                        ee_pos=demo_group["obs"]["robot0_eef_pos"][:].astype(np.float32),
+                        ee_quat=demo_group["obs"]["robot0_eef_quat"][:].astype(np.float32),
+                        gripper_qpos=demo_group["obs"]["robot0_gripper_qpos"][:].astype(np.float32),
+                        joint_pos=demo_group["obs"]["robot0_joint_pos"][:].astype(np.float32),
+                        joint_vel=demo_group["obs"]["robot0_joint_vel"][:].astype(np.float32),
                         object=padded_object_state,
                     ),
                 ),
@@ -200,7 +206,7 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
                 is_last=np.zeros(demo_length, dtype=np.bool_),
                 is_terminal=np.zeros(demo_length, dtype=np.bool_),
                 discount=np.ones(demo_length, dtype=np.float32),
-                reward=f["data"][demo]["rewards"][:],
+                reward=rewards,
             )
             data["is_first"][0] = True
 
