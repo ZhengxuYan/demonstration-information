@@ -105,7 +105,7 @@ def load_external_latents(path: Path):
 
 def normalized_knn(
     latents: np.ndarray,
-    demo_keys: np.ndarray,
+    ep_idxs: np.ndarray,
     query_index: int,
     top_k: int,
 ) -> list[tuple[int, float, float]]:
@@ -116,13 +116,13 @@ def normalized_knn(
     dist = np.linalg.norm(normalized - query[None, :], axis=1)
     order = np.argsort(dist)
     out = []
-    query_demo = str(demo_keys[query_index])
-    used_demos = {query_demo}
+    query_ep = int(ep_idxs[query_index])
+    used_eps = {query_ep}
     for idx in order:
-        demo_key = str(demo_keys[idx])
-        if demo_key in used_demos:
+        ep_idx = int(ep_idxs[idx])
+        if ep_idx in used_eps:
             continue
-        used_demos.add(demo_key)
+        used_eps.add(ep_idx)
         out.append((int(idx), float(dist[idx]), float(cosine[idx])))
         if len(out) >= top_k:
             break
@@ -240,10 +240,12 @@ def main() -> None:
         q_ep = int(ep_idxs[q_idx])
         q_step = int(step_idxs[q_idx])
         for rank, (n_idx, dist, cosine) in enumerate(
-            normalized_knn(latents, demo_keys, q_idx, args.top_k), start=1
+            normalized_knn(latents, ep_idxs, q_idx, args.top_k), start=1
         ):
             n_ep = int(ep_idxs[n_idx])
             n_step = int(step_idxs[n_idx])
+            if n_ep == q_ep:
+                raise AssertionError(f"same-demo neighbor selected for query demo {q_ep}, step {q_step}")
             img_rel = f"frames/neighbor_q{q_ep:04d}_{q_step:04d}_r{rank:02d}_d{n_ep:04d}_{n_step:04d}.png"
             save_frame(args.output / img_rel, read_frame(args.dataset, str(demo_keys[n_idx]), args.view_key, n_step))
             rows.append(
