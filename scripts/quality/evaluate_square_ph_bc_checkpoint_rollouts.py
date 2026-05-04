@@ -65,7 +65,7 @@ def render_left_close_low_image(env, height: int, width: int) -> np.ndarray:
         raw_env.env.sim.model.cam_pos[cam_id] = LEFT_CLOSE_LOW_POS
         raw_env.env.sim.model.cam_quat[cam_id] = LEFT_CLOSE_LOW_QUAT_WXYZ
         raw_env.env.sim.forward()
-        return raw_env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
+        return raw_env.render(mode="rgb_array", height=height, width=width, camera_name="agentview").copy()
     finally:
         raw_env.env.sim.model.cam_pos[cam_id] = old_pos
         raw_env.env.sim.model.cam_quat[cam_id] = old_quat
