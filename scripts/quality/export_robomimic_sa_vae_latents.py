@@ -39,6 +39,18 @@ def mask_demos(hdf5_file: h5py.File, filter_key: str | None) -> set[str] | None:
     return {x.decode("utf-8") if isinstance(x, bytes) else str(x) for x in demos}
 
 
+def unwrap_dataset_statistics(stats: dict) -> dict:
+    if "mean" in stats:
+        return stats
+    candidates = {key: value for key, value in stats.items() if isinstance(value, dict) and "mean" in value}
+    if len(candidates) == 1:
+        return next(iter(candidates.values()))
+    raise KeyError(
+        "Could not identify dataset statistics subtree. "
+        f"Top-level keys: {sorted(stats.keys())}; candidate dataset keys: {sorted(candidates.keys())}"
+    )
+
+
 def load_episodes(
     dataset: Path,
     obs_structure: dict,
@@ -149,6 +161,7 @@ def stack_latent_batches(episodes: list[dict], batch_size: int, image_keys: list
 def main() -> None:
     args = parse_args()
     alg, state, dataset_statistics, config = load_checkpoint(str(args.checkpoint))
+    dataset_statistics = unwrap_dataset_statistics(dataset_statistics)
 
     obs_structure = config.structure["observation"].to_dict()
     action_structure = config.structure["action"].to_dict()
