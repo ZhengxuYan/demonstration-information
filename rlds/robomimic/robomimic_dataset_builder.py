@@ -9,6 +9,19 @@ import tensorflow_datasets as tfds
 
 # Keep the dataset builder independent from the full robomimic runtime stack.
 OBJECT_STATE_SIZE = 44
+JOINT_STATE_SIZE = 7
+
+
+def _read_or_zeros(group: h5py.Group, key: str, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
+    if key in group:
+        return group[key][:].astype(dtype)
+    return np.zeros(shape, dtype=dtype)
+
+
+def _read_one_or_zeros(group: h5py.Group, key: str, index: int, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
+    if key in group:
+        return group[key][index].astype(dtype)
+    return np.zeros(shape, dtype=dtype)
 
 
 class RoboMimic(tfds.core.GeneratorBasedBuilder):
@@ -186,7 +199,7 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
                 else np.zeros(demo_length, dtype=np.float32)
             )
             padded_object_state = np.zeros((demo_length, OBJECT_STATE_SIZE), dtype=np.float32)
-            object_state = demo_group["obs"]["object"][:].astype(np.float32)
+            object_state = _read_or_zeros(demo_group["obs"], "object", (demo_length, 0))
             padded_object_state[:, : object_state.shape[-1]] = object_state
             data = dict(
                 action=demo_group["actions"][:].astype(np.float32),
@@ -197,8 +210,12 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
                         ee_pos=demo_group["obs"]["robot0_eef_pos"][:].astype(np.float32),
                         ee_quat=demo_group["obs"]["robot0_eef_quat"][:].astype(np.float32),
                         gripper_qpos=demo_group["obs"]["robot0_gripper_qpos"][:].astype(np.float32),
-                        joint_pos=demo_group["obs"]["robot0_joint_pos"][:].astype(np.float32),
-                        joint_vel=demo_group["obs"]["robot0_joint_vel"][:].astype(np.float32),
+                        joint_pos=_read_or_zeros(
+                            demo_group["obs"], "robot0_joint_pos", (demo_length, JOINT_STATE_SIZE)
+                        ),
+                        joint_vel=_read_or_zeros(
+                            demo_group["obs"], "robot0_joint_vel", (demo_length, JOINT_STATE_SIZE)
+                        ),
                         object=padded_object_state,
                     ),
                 ),
@@ -218,21 +235,23 @@ class RoboMimic(tfds.core.GeneratorBasedBuilder):
 
             # Finally add the terminal states.
             final_padded_object_state = np.zeros((OBJECT_STATE_SIZE,), dtype=np.float32)
-            final_object_state = f["data"][demo]["next_obs"]["object"][demo_length - 1].astype(np.float32)
+            final_object_state = _read_one_or_zeros(demo_group["next_obs"], "object", demo_length - 1, (0,))
             final_padded_object_state[: final_object_state.shape[-1]] = final_object_state
             terminal_step = dict(
                 action=np.zeros(7, dtype=np.float32),
                 observation=dict(
-                    agent_image=f["data"][demo]["next_obs"]["agentview_image"][demo_length - 1],
-                    wrist_image=f["data"][demo]["next_obs"]["robot0_eye_in_hand_image"][demo_length - 1],
+                    agent_image=demo_group["next_obs"]["agentview_image"][demo_length - 1],
+                    wrist_image=demo_group["next_obs"]["robot0_eye_in_hand_image"][demo_length - 1],
                     state=dict(
-                        ee_pos=f["data"][demo]["next_obs"]["robot0_eef_pos"][demo_length - 1].astype(np.float32),
-                        ee_quat=f["data"][demo]["next_obs"]["robot0_eef_quat"][demo_length - 1].astype(np.float32),
-                        gripper_qpos=f["data"][demo]["next_obs"]["robot0_gripper_qpos"][demo_length - 1].astype(
-                            np.float32
+                        ee_pos=demo_group["next_obs"]["robot0_eef_pos"][demo_length - 1].astype(np.float32),
+                        ee_quat=demo_group["next_obs"]["robot0_eef_quat"][demo_length - 1].astype(np.float32),
+                        gripper_qpos=demo_group["next_obs"]["robot0_gripper_qpos"][demo_length - 1].astype(np.float32),
+                        joint_pos=_read_one_or_zeros(
+                            demo_group["next_obs"], "robot0_joint_pos", demo_length - 1, (JOINT_STATE_SIZE,)
                         ),
-                        joint_pos=f["data"][demo]["next_obs"]["robot0_joint_pos"][demo_length - 1].astype(np.float32),
-                        joint_vel=f["data"][demo]["next_obs"]["robot0_joint_vel"][demo_length - 1].astype(np.float32),
+                        joint_vel=_read_one_or_zeros(
+                            demo_group["next_obs"], "robot0_joint_vel", demo_length - 1, (JOINT_STATE_SIZE,)
+                        ),
                         object=final_padded_object_state,
                     ),
                 ),
