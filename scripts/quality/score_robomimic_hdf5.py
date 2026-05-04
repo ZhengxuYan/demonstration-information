@@ -197,18 +197,41 @@ def _normalize(x, mode: str, mean, std, low, high):
 
 
 def normalize_tree(tree: Dict, structure: Dict, stats: Dict) -> Dict:
+    def _stat_key(current_stats: Dict, current_key: str) -> str:
+        aliases = (
+            current_key,
+            current_key.lower(),
+            current_key.upper(),
+            current_key.lower().replace("_", ""),
+            current_key.upper().replace("_", ""),
+        )
+        for alias in aliases:
+            if alias in current_stats:
+                return alias
+        normalized_key = current_key.replace("_", "").lower()
+        for alias in current_stats:
+            if str(alias).replace("_", "").lower() == normalized_key:
+                return alias
+        raise KeyError(f"Could not find stats for key {current_key}")
+
     def _child_stats(current_stats: Dict, current_key: str) -> Dict:
         if all(name in current_stats for name in ("mean", "std", "min", "max")):
-            return {name: current_stats[name][current_key] for name in ("mean", "std", "min", "max")}
+            stat_key = _stat_key(current_stats["mean"], current_key)
+            return {name: current_stats[name][stat_key] for name in ("mean", "std", "min", "max")}
         if current_key in current_stats:
             return current_stats[current_key]
-        raise KeyError(f"Could not find stats for key {current_key}")
+        stat_key = _stat_key(current_stats, current_key)
+        return current_stats[stat_key]
 
     def _leaf_stat(current_stats: Dict, stat_name: str, current_key: str):
         if stat_name in current_stats:
-            return current_stats[stat_name][current_key]
+            stat_key = _stat_key(current_stats[stat_name], current_key)
+            return current_stats[stat_name][stat_key]
         if current_key in current_stats and stat_name in current_stats[current_key]:
             return current_stats[current_key][stat_name]
+        stat_key = _stat_key(current_stats, current_key)
+        if stat_name in current_stats[stat_key]:
+            return current_stats[stat_key][stat_name]
         raise KeyError(f"Could not find {stat_name} stats for key {current_key}")
 
     out = {}
