@@ -15,13 +15,7 @@ import jax
 import numpy as np
 
 from openx.utils.evaluate import load_checkpoint
-from score_robomimic_hdf5 import (
-    IMAGE_KEY_TO_HDF5_DATASET,
-    concatenate_ordered,
-    normalize_tree,
-    stack_batches,
-    stats_subtree,
-)
+from score_robomimic_hdf5 import IMAGE_KEY_TO_HDF5_DATASET, concatenate_ordered, normalize_tree, stats_subtree
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,6 +112,40 @@ def load_episodes(
     return episodes
 
 
+def stack_latent_batches(episodes: list[dict], batch_size: int, image_keys: list[str]):
+    merged = {
+        "observation": {
+            "state": np.concatenate([ep["observation"]["state"] for ep in episodes], axis=0),
+            "image": {
+                image_key: np.concatenate([ep["observation"]["image"][image_key] for ep in episodes], axis=0)
+                for image_key in image_keys
+            },
+        },
+        "action": np.concatenate([ep["action"] for ep in episodes], axis=0),
+        "mask": np.concatenate([ep["mask"] for ep in episodes], axis=0),
+        "ep_idx": np.concatenate([ep["ep_idx"] for ep in episodes], axis=0),
+        "step_idx": np.concatenate([ep["step_idx"] for ep in episodes], axis=0),
+        "demo_key": np.concatenate([ep["demo_key"] for ep in episodes], axis=0),
+    }
+
+    total = merged["action"].shape[0]
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        yield {
+            "observation": {
+                "state": merged["observation"]["state"][start:end],
+                "image": {
+                    image_key: merged["observation"]["image"][image_key][start:end] for image_key in image_keys
+                },
+            },
+            "action": merged["action"][start:end],
+            "mask": merged["mask"][start:end],
+            "ep_idx": merged["ep_idx"][start:end],
+            "step_idx": merged["step_idx"][start:end],
+            "demo_key": merged["demo_key"][start:end],
+        }
+
+
 def main() -> None:
     args = parse_args()
     alg, state, dataset_statistics, config = load_checkpoint(str(args.checkpoint))
@@ -145,7 +173,7 @@ def main() -> None:
     step_idxs = []
     demo_keys = []
     base_rng = jax.random.key(0)
-    for batch_idx, batch in enumerate(stack_batches(episodes, args.batch_size, image_keys)):
+    for batch_idx, batch in enumerate(stack_latent_batches(episodes, args.batch_size, image_keys)):
         rng = jax.random.fold_in(base_rng, batch_idx)
         model_batch = {
             "observation": {
@@ -158,9 +186,7 @@ def main() -> None:
         latents.append(np.asarray(predict(model_batch, rng), dtype=np.float32))
         ep_idxs.append(np.asarray(batch["ep_idx"], dtype=np.int64))
         step_idxs.append(np.asarray(batch["step_idx"], dtype=np.int64))
-
-    for episode in episodes:
-        demo_keys.append(np.asarray(episode["demo_key"], dtype=object))
+        demo_keys.append(np.asarray(batch["demo_key"], dtype=object))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
