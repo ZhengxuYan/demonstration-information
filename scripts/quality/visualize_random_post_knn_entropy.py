@@ -15,6 +15,7 @@ import torch
 from matplotlib import pyplot as plt
 
 import robomimic.utils.tensor_utils as TensorUtils
+from robomimic.models.obs_nets import MIMO_Transformer
 
 from score_robomimic_policy_nll import index_metadata, load_algo, make_loader
 
@@ -33,7 +34,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional external latent file with arrays latent, ep_idx, step_idx, demo_key.",
     )
-    parser.add_argument("--latent-label", type=str, default="BC policy observation encoder")
+    parser.add_argument("--latent-label", type=str, default="BC policy pre-action hidden state")
     parser.add_argument("--filter-key", type=str, default=None)
     parser.add_argument("--query", action="append", default=[], help="Explicit query as demo_id:frame_id, e.g. 12:47")
     parser.add_argument("--num-queries", type=int, default=24)
@@ -41,6 +42,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", type=str, default=None)
     return parser.parse_args()
+
+
+def policy_pre_action_latent(policy, obs, goal):
+    """Return the policy hidden state immediately before the action decoder/head."""
+    inputs = {"obs": obs}
+    if goal is not None:
+        inputs["goal"] = goal
+
+    if "transformer" in policy.nets:
+        outputs = MIMO_Transformer.forward(policy, **inputs)
+        latent = outputs["transformer_encoder_outputs"]
+        # Robomimic transformer BC supervises the current action from the final
+        # context timestep when supervise_all_steps is false, which is our setup.
+        return latent[:, -1, :] if latent.ndim == 3 else latent
+
+    if "mlp" in policy.nets:
+        encoded = policy.nets["encoder"](**inputs)
+        return policy.nets["mlp"](encoded)
+
+    return policy.nets["encoder"](**inputs)
 
 
 def load_scores(path: Path) -> dict[tuple[int, int], float]:
@@ -62,18 +83,13 @@ def extract_policy_latents(args: argparse.Namespace):
     step_idxs = []
     demo_keys = []
     policy = algo.nets["policy"]
-    encoder = policy.nets["encoder"]
 
     with torch.no_grad():
         for batch in loader:
             indices = np.asarray(TensorUtils.to_numpy(batch["index"]))
             input_batch = algo.process_batch_for_training(batch)
             input_batch = algo.postprocess_batch_for_training(input_batch, obs_normalization_stats=None)
-            goal = input_batch.get("goal_obs")
-            if goal is None:
-                latent = encoder(obs=input_batch["obs"])
-            else:
-                latent = encoder(obs=input_batch["obs"], goal=goal)
+            latent = policy_pre_action_latent(policy, input_batch["obs"], input_batch.get("goal_obs"))
             latent_np = TensorUtils.to_numpy(latent).astype(np.float32)
             ep, step, demos = index_metadata(dataset, indices)
             latents.append(latent_np)
