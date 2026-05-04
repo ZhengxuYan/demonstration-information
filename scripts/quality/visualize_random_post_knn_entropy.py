@@ -103,7 +103,12 @@ def load_external_latents(path: Path):
     )
 
 
-def normalized_knn(latents: np.ndarray, query_index: int, top_k: int) -> list[tuple[int, float, float]]:
+def normalized_knn(
+    latents: np.ndarray,
+    demo_keys: np.ndarray,
+    query_index: int,
+    top_k: int,
+) -> list[tuple[int, float, float]]:
     norms = np.linalg.norm(latents, axis=1, keepdims=True)
     normalized = latents / np.maximum(norms, 1e-12)
     query = normalized[query_index]
@@ -111,9 +116,13 @@ def normalized_knn(latents: np.ndarray, query_index: int, top_k: int) -> list[tu
     dist = np.linalg.norm(normalized - query[None, :], axis=1)
     order = np.argsort(dist)
     out = []
+    query_demo = str(demo_keys[query_index])
+    used_demos = {query_demo}
     for idx in order:
-        if int(idx) == int(query_index):
+        demo_key = str(demo_keys[idx])
+        if demo_key in used_demos:
             continue
+        used_demos.add(demo_key)
         out.append((int(idx), float(dist[idx]), float(cosine[idx])))
         if len(out) >= top_k:
             break
@@ -230,7 +239,9 @@ def main() -> None:
     for q_idx in queries:
         q_ep = int(ep_idxs[q_idx])
         q_step = int(step_idxs[q_idx])
-        for rank, (n_idx, dist, cosine) in enumerate(normalized_knn(latents, q_idx, args.top_k), start=1):
+        for rank, (n_idx, dist, cosine) in enumerate(
+            normalized_knn(latents, demo_keys, q_idx, args.top_k), start=1
+        ):
             n_ep = int(ep_idxs[n_idx])
             n_step = int(step_idxs[n_idx])
             img_rel = f"frames/neighbor_q{q_ep:04d}_{q_step:04d}_r{rank:02d}_d{n_ep:04d}_{n_step:04d}.png"
