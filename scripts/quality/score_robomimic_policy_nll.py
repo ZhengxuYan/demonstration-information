@@ -5,6 +5,7 @@ The score is transition-level negative log likelihood under the policy:
 
 * GMM: -log p_continuous(a_t | s_t)
 * Discrete: -sum_j log p(bin(a_t[j]) | s_t)
+* Soft discrete: -sum_j sum_i q_i(a_t[j]) log p(bin_i | s_t)
 
 Outputs a pickle with sample-level scores and per-trajectory means.
 """
@@ -29,6 +30,8 @@ import robomimic.utils.torch_utils as TorchUtils
 from robomimic.algo import algo_factory
 from robomimic.utils.train_utils import dataset_factory
 
+from discrete_nll_utils import hard_discrete_nll_from_logits, soft_discrete_nll_from_logits
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -40,6 +43,14 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cuda or cpu.")
+    parser.add_argument(
+        "--discrete-loss-type",
+        choices=["checkpoint", "hard_ce", "soft_ce"],
+        default="checkpoint",
+        help="Override discrete NLL target type. By default, use checkpoint config.",
+    )
+    parser.add_argument("--soft-sigma-bins", type=float, default=None, help="Override soft_ce Gaussian sigma in bins.")
+    parser.add_argument("--soft-truncate-bins", type=int, default=None, help="Override soft_ce truncation radius in bins.")
     return parser.parse_args()
 
 
@@ -102,7 +113,30 @@ def make_loader(config, batch_size: int, num_workers: int, filter_key: str | Non
     return dataset, loader
 
 
-def score(algo, config, dataset, loader):
+def discrete_score_settings(config, args) -> dict[str, object] | None:
+    if "discrete" not in config.algo or not config.algo.discrete.enabled:
+        return None
+    loss_type = getattr(config.algo.discrete, "loss_type", "hard_ce")
+    if args.discrete_loss_type != "checkpoint":
+        loss_type = args.discrete_loss_type
+    return {
+        "loss_type": loss_type,
+        "num_bins": int(config.algo.discrete.num_bins),
+        "soft_sigma_bins": float(
+            args.soft_sigma_bins
+            if args.soft_sigma_bins is not None
+            else getattr(config.algo.discrete, "soft_sigma_bins", 1.5)
+        ),
+        "soft_truncate_bins": int(
+            args.soft_truncate_bins
+            if args.soft_truncate_bins is not None
+            else getattr(config.algo.discrete, "soft_truncate_bins", 6)
+        ),
+    }
+
+
+def score(algo, config, dataset, loader, args):
+    discrete_settings = discrete_score_settings(config, args)
     sample_score = []
     sample_log_prob = []
     sample_ep_idx = []
@@ -118,7 +152,27 @@ def score(algo, config, dataset, loader):
                 obs_normalization_stats=None,
             )
             predictions = algo._forward_training(input_batch)
-            log_probs = TensorUtils.to_numpy(predictions["log_probs"]).astype(np.float64)
+            if discrete_settings is not None and "logits" in predictions:
+                loss_type = str(discrete_settings["loss_type"])
+                if loss_type == "soft_ce":
+                    nll_t = soft_discrete_nll_from_logits(
+                        predictions["logits"],
+                        input_batch["actions"],
+                        num_bins=int(discrete_settings["num_bins"]),
+                        sigma_bins=float(discrete_settings["soft_sigma_bins"]),
+                        truncate_bins=int(discrete_settings["soft_truncate_bins"]),
+                    )
+                elif loss_type == "hard_ce":
+                    nll_t = hard_discrete_nll_from_logits(
+                        predictions["logits"],
+                        input_batch["actions"],
+                        num_bins=int(discrete_settings["num_bins"]),
+                    )
+                else:
+                    raise ValueError(f"Unsupported discrete loss_type: {loss_type}")
+                log_probs = -TensorUtils.to_numpy(nll_t).astype(np.float64)
+            else:
+                log_probs = TensorUtils.to_numpy(predictions["log_probs"]).astype(np.float64)
             nll = -log_probs
 
             ep_idxs, step_idxs, demo_keys = index_metadata(dataset, indices)
@@ -146,7 +200,12 @@ def score(algo, config, dataset, loader):
         "sample_ep_idx": sample_ep_idx.astype(np.int64),
         "sample_step_idx": sample_step_idx.astype(np.int64),
         "sample_demo_key": sample_demo_key,
-        "score_name": "negative_log_likelihood",
+        "score_name": (
+            "soft_discrete_negative_log_likelihood"
+            if discrete_settings is not None and discrete_settings["loss_type"] == "soft_ce"
+            else "negative_log_likelihood"
+        ),
+        "score_parameters": discrete_settings or {},
         "checkpoint_config": {
             "algo_name": config.algo_name,
             "frame_stack": int(config.train.frame_stack),
@@ -176,7 +235,7 @@ def main():
 
     algo, config = load_algo(args.checkpoint, args.dataset, device)
     dataset, loader = make_loader(config, args.batch_size, args.num_workers, args.filter_key)
-    scores = score(algo, config, dataset, loader)
+    scores = score(algo, config, dataset, loader, args)
 
     pkl_path = args.output / f"{args.name}.pkl"
     csv_path = args.output / f"{args.name}_trajectory_scores.csv"

@@ -29,6 +29,18 @@ def replace_once(path, old, new):
 def patch_config():
     text = BC_CONFIG.read_text()
     if "self.algo.discrete.enabled" in text:
+        if "self.algo.discrete.loss_type" not in text:
+            old = '        self.algo.discrete.bin_type = "uniform"         # currently only uniform bins over [-1, 1]\n'
+            new = old + (
+                '        self.algo.discrete.loss_type = "hard_ce"        # hard_ce or soft_ce\n'
+                "        self.algo.discrete.soft_sigma_bins = 1.5        # Gaussian sigma in bin units for soft_ce\n"
+                "        self.algo.discrete.soft_truncate_bins = 6       # truncate soft_ce target to +/- this many bins\n"
+            )
+            if old not in text:
+                raise RuntimeError(f"Expected discrete bin_type line not found in {BC_CONFIG}")
+            BC_CONFIG.write_text(text.replace(old, new, 1))
+            print(f"Patched soft discrete settings: {BC_CONFIG}")
+            return
         print(f"Already patched: {BC_CONFIG}")
         return
     marker = "        # stochastic VAE policy settings\n"
@@ -36,6 +48,9 @@ def patch_config():
         self.algo.discrete.enabled = False              # whether to train a categorical policy over action bins
         self.algo.discrete.num_bins = 256               # number of uniform bins per action dimension
         self.algo.discrete.bin_type = \"uniform\"         # currently only uniform bins over [-1, 1]
+        self.algo.discrete.loss_type = \"hard_ce\"        # hard_ce or soft_ce
+        self.algo.discrete.soft_sigma_bins = 1.5        # Gaussian sigma in bin units for soft_ce
+        self.algo.discrete.soft_truncate_bins = 6       # truncate soft_ce target to +/- this many bins
 
 """
     if marker not in text:
@@ -274,6 +289,38 @@ class BC_Transformer_Discrete(BC_Transformer):
         bins = torch.floor((clipped + 1.0) * 0.5 * num_bins).long()
         return torch.clamp(bins, 0, num_bins - 1)
 
+    def _discrete_nll(self, logits, target_bins):
+        loss_type = getattr(self.algo_config.discrete, \"loss_type\", \"hard_ce\")
+        if loss_type == \"hard_ce\":
+            ce = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),
+                target_bins.reshape(-1),
+                reduction=\"none\",
+            ).reshape(target_bins.shape)
+            return ce.sum(dim=-1)
+        if loss_type != \"soft_ce\":
+            raise ValueError(\"Unsupported discrete loss_type: {}\".format(loss_type))
+
+        num_bins = logits.shape[-1]
+        sigma = float(getattr(self.algo_config.discrete, \"soft_sigma_bins\", 1.5))
+        truncate = int(getattr(self.algo_config.discrete, \"soft_truncate_bins\", 6))
+        if sigma <= 0:
+            ce = F.cross_entropy(
+                logits.reshape(-1, num_bins),
+                target_bins.reshape(-1),
+                reduction=\"none\",
+            ).reshape(target_bins.shape)
+            return ce.sum(dim=-1)
+
+        offsets = torch.arange(num_bins, device=logits.device, dtype=logits.dtype)
+        distances = offsets.view(*([1] * target_bins.ndim), num_bins) - target_bins.unsqueeze(-1).to(logits.dtype)
+        weights = torch.exp(-0.5 * (distances / sigma) ** 2)
+        if truncate >= 0:
+            weights = weights * (torch.abs(distances) <= truncate).to(weights.dtype)
+        weights = weights / torch.clamp(weights.sum(dim=-1, keepdim=True), min=1e-12)
+        log_probs = F.log_softmax(logits, dim=-1)
+        return -(weights * log_probs).sum(dim=-1).sum(dim=-1)
+
     def _forward_training(self, batch, epoch=None):
         TensorUtils.assert_size_at_dim(
             batch[\"obs\"],
@@ -291,12 +338,7 @@ class BC_Transformer_Discrete(BC_Transformer):
             logits = logits[:, -1, :, :]
 
         target_bins = self._actions_to_bins(batch[\"actions\"])
-        ce = F.cross_entropy(
-            logits.reshape(-1, logits.shape[-1]),
-            target_bins.reshape(-1),
-            reduction=\"none\",
-        ).reshape(target_bins.shape)
-        nll = ce.sum(dim=-1)
+        nll = self._discrete_nll(logits, target_bins)
 
         return OrderedDict(
             logits=logits,
@@ -386,18 +428,45 @@ class BC_Discrete(BC_Gaussian):
         bins = torch.floor((clipped + 1.0) * 0.5 * num_bins).long()
         return torch.clamp(bins, 0, num_bins - 1)
 
+    def _discrete_nll(self, logits, target_bins):
+        loss_type = getattr(self.algo_config.discrete, \"loss_type\", \"hard_ce\")
+        if loss_type == \"hard_ce\":
+            ce = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),
+                target_bins.reshape(-1),
+                reduction=\"none\",
+            ).reshape(target_bins.shape)
+            return ce.sum(dim=-1)
+        if loss_type != \"soft_ce\":
+            raise ValueError(\"Unsupported discrete loss_type: {}\".format(loss_type))
+
+        num_bins = logits.shape[-1]
+        sigma = float(getattr(self.algo_config.discrete, \"soft_sigma_bins\", 1.5))
+        truncate = int(getattr(self.algo_config.discrete, \"soft_truncate_bins\", 6))
+        if sigma <= 0:
+            ce = F.cross_entropy(
+                logits.reshape(-1, num_bins),
+                target_bins.reshape(-1),
+                reduction=\"none\",
+            ).reshape(target_bins.shape)
+            return ce.sum(dim=-1)
+
+        offsets = torch.arange(num_bins, device=logits.device, dtype=logits.dtype)
+        distances = offsets.view(*([1] * target_bins.ndim), num_bins) - target_bins.unsqueeze(-1).to(logits.dtype)
+        weights = torch.exp(-0.5 * (distances / sigma) ** 2)
+        if truncate >= 0:
+            weights = weights * (torch.abs(distances) <= truncate).to(weights.dtype)
+        weights = weights / torch.clamp(weights.sum(dim=-1, keepdim=True), min=1e-12)
+        log_probs = F.log_softmax(logits, dim=-1)
+        return -(weights * log_probs).sum(dim=-1).sum(dim=-1)
+
     def _forward_training(self, batch):
         logits = self.nets[\"policy\"].forward_train(
             obs_dict=batch[\"obs\"],
             goal_dict=batch[\"goal_obs\"],
         )
         target_bins = self._actions_to_bins(batch[\"actions\"])
-        ce = F.cross_entropy(
-            logits.reshape(-1, logits.shape[-1]),
-            target_bins.reshape(-1),
-            reduction=\"none\",
-        ).reshape(target_bins.shape)
-        nll = ce.sum(dim=-1)
+        nll = self._discrete_nll(logits, target_bins)
 
         return OrderedDict(
             logits=logits,
