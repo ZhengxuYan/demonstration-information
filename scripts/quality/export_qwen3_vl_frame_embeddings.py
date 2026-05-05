@@ -51,11 +51,23 @@ def parse_args() -> argparse.Namespace:
 def load_embedder(model_name: str, device: str | None):
     try:
         from scripts.qwen3_vl_embedding import Qwen3VLEmbedder
-    except Exception as exc:
-        raise RuntimeError(
-            "Could not import scripts.qwen3_vl_embedding.Qwen3VLEmbedder. "
-            "Install the official Qwen3-VL-Embedding requirements in this environment before running."
-        ) from exc
+    except Exception:
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot = snapshot_download(
+                repo_id=model_name,
+                allow_patterns=["scripts/*.py"],
+            )
+            if snapshot not in sys.path:
+                sys.path.insert(0, snapshot)
+            from scripts.qwen3_vl_embedding import Qwen3VLEmbedder
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not import the official scripts.qwen3_vl_embedding.Qwen3VLEmbedder. "
+                "Install Qwen3-VL-Embedding requirements, including transformers>=4.57.0, "
+                "qwen-vl-utils>=0.0.14, torch, and huggingface_hub."
+            ) from exc
 
     kwargs = {"model_name_or_path": model_name}
     if device is not None:
@@ -101,12 +113,14 @@ def composite_image(primary: np.ndarray, wrist: np.ndarray) -> Image.Image:
 
 def embed_batch(embedder, prompt: str, image_paths: list[Path]) -> np.ndarray:
     inputs = [{"text": prompt, "image": str(path)} for path in image_paths]
-    if hasattr(embedder, "encode"):
+    if hasattr(embedder, "process"):
+        embeddings = embedder.process(inputs)
+    elif hasattr(embedder, "encode"):
         embeddings = embedder.encode(inputs)
     elif hasattr(embedder, "embed"):
         embeddings = embedder.embed(inputs)
     else:
-        raise AttributeError("Qwen3VLEmbedder exposes neither encode(...) nor embed(...).")
+        raise AttributeError("Qwen3VLEmbedder exposes none of process(...), encode(...), or embed(...).")
     return np.asarray(embeddings, dtype=np.float32)
 
 
