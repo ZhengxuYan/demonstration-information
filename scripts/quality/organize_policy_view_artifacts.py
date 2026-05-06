@@ -11,6 +11,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-root", type=Path, default=Path("/iris/u/jasonyan/data/robomimic_outputs/policy_view_experiments"))
     parser.add_argument("--score-root", type=Path, default=Path("/iris/u/jasonyan/data/robomimic_policy_scores/expert200_random_post_bc"))
     parser.add_argument("--knn-root", type=Path, default=Path("/iris/u/jasonyan/data/knn_entropy/expert200_random_post"))
+    parser.add_argument(
+        "--all-checkpoints",
+        action="store_true",
+        help="Index every checkpoint. Default only indexes final and lowest-validation checkpoints.",
+    )
     parser.add_argument("--apply", action="store_true", help="Create symlinks and manifests. Default only prints a dry-run.")
     parser.add_argument("--checksum", action="store_true", help="Compute sha256 for regular files. Can be slow.")
     return parser.parse_args()
@@ -89,6 +95,45 @@ def safe_rel_name(path: Path) -> str:
     return path.name.replace("/", "_")
 
 
+def best_validation_checkpoint(checkpoints: list[Path]) -> Path | None:
+    candidates = []
+    for path in checkpoints:
+        match = re.search(r"_best_validation_([0-9.eE+-]+)\.pth$", path.name)
+        if not match:
+            continue
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            continue
+        candidates.append((value, path))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1].name))[1]
+
+
+def selected_checkpoints(run_dir: Path, include_all: bool) -> list[tuple[Path, str]]:
+    checkpoints = sorted(run_dir.glob("*/models/*.pth"))
+    if include_all:
+        return [(path, path.stem) for path in checkpoints]
+
+    selected: list[tuple[Path, str]] = []
+    best = best_validation_checkpoint(checkpoints)
+    if best is not None:
+        selected.append((best, "best_validation"))
+    finals = [path for path in checkpoints if path.name == "model_epoch_2000.pth"]
+    if finals:
+        selected.append((finals[-1], "final"))
+
+    deduped = []
+    seen = set()
+    for path, label in selected:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append((path, label))
+    return deduped
+
+
 def add_artifact(rows: list[Artifact], args, artifact_type: str, original: Path, symlink: Path, run_name: str, label: str) -> None:
     size, mtime = stat_info(original)
     rows.append(
@@ -128,8 +173,7 @@ def collect(args) -> list[Artifact]:
         algo = infer_algo(run_dir.name)
         if algo not in {"gmm", "discrete", "discrete_smooth"}:
             continue
-        for ckpt in sorted(run_dir.glob("*/models/*.pth")):
-            label = ckpt.stem
+        for ckpt, label in selected_checkpoints(run_dir, args.all_checkpoints):
             add_artifact(
                 rows,
                 args,
