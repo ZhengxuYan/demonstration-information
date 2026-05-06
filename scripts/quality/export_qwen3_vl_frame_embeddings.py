@@ -15,6 +15,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import torch
 from PIL import Image
 from tqdm import tqdm
 
@@ -121,6 +122,8 @@ def embed_batch(embedder, prompt: str, image_paths: list[Path]) -> np.ndarray:
         embeddings = embedder.embed(inputs)
     else:
         raise AttributeError("Qwen3VLEmbedder exposes none of process(...), encode(...), or embed(...).")
+    if isinstance(embeddings, torch.Tensor):
+        embeddings = embeddings.detach().cpu()
     return np.asarray(embeddings, dtype=np.float32)
 
 
