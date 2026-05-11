@@ -2,9 +2,10 @@
 # Train non-abs BC baselines and state-only BC policies.
 #
 # Usage:
-#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh all all
-#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh original all
-#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh state_only discrete_smooth
+#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh prepare_expert200 all all
+#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh original discrete_smooth ph
+#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh original gmm expert200
+#   sbatch scripts/slurm/train_nonabs_bc_retraining_and_state_only.sh state_only discrete_smooth all
 
 #SBATCH --partition=iris-hi
 #SBATCH --account=iris
@@ -22,13 +23,18 @@ set -euo pipefail
 
 MODE="${1:-all}"
 POLICY="${2:-all}"
+DATASET_SCOPE="${3:-all}"
 
 if [[ "${MODE}" != "all" && "${MODE}" != "original" && "${MODE}" != "state_only" && "${MODE}" != "prepare_expert200" ]]; then
-  echo "Usage: sbatch $0 all|original|state_only|prepare_expert200 all|gmm|discrete|discrete_smooth" >&2
+  echo "Usage: sbatch $0 all|original|state_only|prepare_expert200 all|gmm|discrete|discrete_smooth all|ph|mh|expert200" >&2
   exit 2
 fi
 if [[ "${POLICY}" != "all" && "${POLICY}" != "gmm" && "${POLICY}" != "discrete" && "${POLICY}" != "discrete_smooth" ]]; then
-  echo "Usage: sbatch $0 all|original|state_only|prepare_expert200 all|gmm|discrete|discrete_smooth" >&2
+  echo "Usage: sbatch $0 all|original|state_only|prepare_expert200 all|gmm|discrete|discrete_smooth all|ph|mh|expert200" >&2
+  exit 2
+fi
+if [[ "${DATASET_SCOPE}" != "all" && "${DATASET_SCOPE}" != "ph" && "${DATASET_SCOPE}" != "mh" && "${DATASET_SCOPE}" != "expert200" ]]; then
+  echo "Usage: sbatch $0 all|original|state_only|prepare_expert200 all|gmm|discrete|discrete_smooth all|ph|mh|expert200" >&2
   exit 2
 fi
 
@@ -74,6 +80,11 @@ export MKL_NUM_THREADS=2
 want_policy() {
   local policy="$1"
   [[ "${POLICY}" == "all" || "${POLICY}" == "${policy}" ]]
+}
+
+want_dataset() {
+  local dataset="$1"
+  [[ "${DATASET_SCOPE}" == "all" || "${DATASET_SCOPE}" == "${dataset}" ]]
 }
 
 policy_algo() {
@@ -153,18 +164,22 @@ train_original() {
   if [[ "${policy}" == "discrete_smooth" ]]; then
     algo_name="discrete_smooth"
   fi
-  write_and_train square_ph "${policy}" agent_wrist image_state \
-    "${PH_ROOT}/square_ph_agent_wrist_image.hdf5" \
-    "square_ph_bc_nonabs_${algo_name}_agent_wrist_seed1"
-  write_and_train square_ph "${policy}" left_close_low_wrist image_state \
-    "${PH_ROOT}/square_ph_left_close_low_wrist_image.hdf5" \
-    "square_ph_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
-  write_and_train expert200_random_post "${policy}" agent_wrist image_state \
-    "${EXPERT_ROOT}/expert200_random_post_agent_wrist_image.hdf5" \
-    "expert200_random_post_bc_nonabs_${algo_name}_agent_wrist_seed1"
-  write_and_train expert200_random_post "${policy}" left_close_low_wrist image_state \
-    "${EXPERT_ROOT}/expert200_random_post_left_close_low_wrist_image.hdf5" \
-    "expert200_random_post_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
+  if want_dataset ph; then
+    write_and_train square_ph "${policy}" agent_wrist image_state \
+      "${PH_ROOT}/square_ph_agent_wrist_image.hdf5" \
+      "square_ph_bc_nonabs_${algo_name}_agent_wrist_seed1"
+    write_and_train square_ph "${policy}" left_close_low_wrist image_state \
+      "${PH_ROOT}/square_ph_left_close_low_wrist_image.hdf5" \
+      "square_ph_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
+  fi
+  if want_dataset expert200; then
+    write_and_train expert200_random_post "${policy}" agent_wrist image_state \
+      "${EXPERT_ROOT}/expert200_random_post_agent_wrist_image.hdf5" \
+      "expert200_random_post_bc_nonabs_${algo_name}_agent_wrist_seed1"
+    write_and_train expert200_random_post "${policy}" left_close_low_wrist image_state \
+      "${EXPERT_ROOT}/expert200_random_post_left_close_low_wrist_image.hdf5" \
+      "expert200_random_post_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
+  fi
 }
 
 train_state_only() {
@@ -173,15 +188,21 @@ train_state_only() {
   if [[ "${policy}" == "discrete_smooth" ]]; then
     algo_name="discrete_smooth"
   fi
-  write_and_train square_ph "${policy}" agent_wrist state_only \
-    "${PH_ROOT}/square_ph_agent_wrist_image.hdf5" \
-    "square_ph_bc_nonabs_state_only_${algo_name}_seed1"
-  write_and_train square_mh "${policy}" agent_wrist state_only \
-    "${MH_DATASET}" \
-    "square_mh_bc_nonabs_state_only_${algo_name}_seed1"
-  write_and_train expert200_random_post "${policy}" agent_wrist state_only \
-    "${EXPERT_ROOT}/expert200_random_post_agent_wrist_image.hdf5" \
-    "expert200_random_post_bc_nonabs_state_only_${algo_name}_seed1"
+  if want_dataset ph; then
+    write_and_train square_ph "${policy}" agent_wrist state_only \
+      "${PH_ROOT}/square_ph_agent_wrist_image.hdf5" \
+      "square_ph_bc_nonabs_state_only_${algo_name}_seed1"
+  fi
+  if want_dataset mh; then
+    write_and_train square_mh "${policy}" agent_wrist state_only \
+      "${MH_DATASET}" \
+      "square_mh_bc_nonabs_state_only_${algo_name}_seed1"
+  fi
+  if want_dataset expert200; then
+    write_and_train expert200_random_post "${policy}" agent_wrist state_only \
+      "${EXPERT_ROOT}/expert200_random_post_agent_wrist_image.hdf5" \
+      "expert200_random_post_bc_nonabs_state_only_${algo_name}_seed1"
+  fi
 }
 
 for policy in gmm discrete discrete_smooth; do
