@@ -48,6 +48,18 @@ def main() -> None:
     if not 0.0 < args.valid_ratio < 1.0:
         raise ValueError(f"--valid-ratio must be in (0, 1), got {args.valid_ratio}")
 
+    if not args.overwrite:
+        with h5py.File(args.dataset, "r") as f:
+            mask_group = f.get("mask")
+            existing_train = read_mask(mask_group, "train")
+            existing_valid = read_mask(mask_group, "valid")
+            if existing_train and existing_valid:
+                print(
+                    f"existing split ok {args.dataset}: "
+                    f"train={len(existing_train)} valid={len(existing_valid)}"
+                )
+                return
+
     with h5py.File(args.dataset, "r+") as f:
         demos = sorted_demo_keys(f["data"])
         if len(demos) < 2:
@@ -56,13 +68,6 @@ def main() -> None:
         mask_group = f.get("mask")
         existing_train = read_mask(mask_group, "train")
         existing_valid = read_mask(mask_group, "valid")
-        if existing_train and existing_valid and not args.overwrite:
-            print(
-                f"existing split ok {args.dataset}: "
-                f"train={len(existing_train)} valid={len(existing_valid)}"
-            )
-            return
-
         rng = np.random.default_rng(args.seed)
         num_valid = max(1, int(round(args.valid_ratio * len(demos))))
         num_valid = min(num_valid, len(demos) - 1)
