@@ -53,6 +53,8 @@ L2_REGULARIZATION="${L2_REGULARIZATION:-0.0}"
 SOFT_SIGMA_BINS="${SOFT_SIGMA_BINS:-1.5}"
 SOFT_TRUNCATE_BINS="${SOFT_TRUNCATE_BINS:-6}"
 ENABLE_WANDB="${ENABLE_WANDB:-1}"
+VALID_RATIO="${VALID_RATIO:-0.1}"
+SPLIT_SEED="${SPLIT_SEED:-0}"
 
 mkdir -p /iris/u/jasonyan/slurm "${CONFIG_DIR}"
 cd "${REPO}"
@@ -108,6 +110,12 @@ write_and_train() {
   algo="$(policy_algo "${policy}")"
 
   cd "${REPO}"
+  python scripts/quality/ensure_hdf5_train_valid_split.py \
+    "${dataset}" \
+    --valid-ratio "${VALID_RATIO}" \
+    --seed "${SPLIT_SEED}" \
+    ${OVERWRITE_TRAIN_VALID_SPLIT:+--overwrite}
+
   cmd=(
     python scripts/quality/write_policy_view_bc_config.py
     --algo "${algo}"
