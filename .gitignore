@@ -205,3 +205,5 @@ expert200_policy_view_dp_report/
 square_ph_policy_view_bc_report/
 square_ph_policy_view_dp_report/
 outputs/
+deploy/
+downloaded_results/

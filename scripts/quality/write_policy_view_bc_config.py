@@ -13,6 +13,8 @@ RGB_KEYS = {
     "left_close_low_wrist": ["left_close_low_image", "robot0_eye_in_hand_image"],
 }
 
+LOW_DIM_KEYS = ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-prefix", type=str, default="square_ph_bc")
     parser.add_argument("--run-name", type=str, default=None, help="Explicit experiment name. Overrides prefix/algo/view/suffix.")
     parser.add_argument("--suffix", type=str, default="_200_seed1")
+    parser.add_argument("--obs-mode", choices=["image_state", "state_only"], default="image_state")
     parser.add_argument("--num-epochs", type=int, default=2000)
     parser.add_argument("--enable-validation", action="store_true")
     parser.add_argument("--log-wandb", action="store_true")
@@ -63,7 +66,12 @@ def main() -> None:
         cfg["algo"]["discrete"]["loss_type"] = args.discrete_loss_type
         cfg["algo"]["discrete"]["soft_sigma_bins"] = args.soft_sigma_bins
         cfg["algo"]["discrete"]["soft_truncate_bins"] = args.soft_truncate_bins
-    cfg["observation"]["modalities"]["obs"]["rgb"] = RGB_KEYS[args.view]
+    cfg["observation"]["modalities"]["obs"]["low_dim"] = LOW_DIM_KEYS
+    if args.obs_mode == "state_only":
+        cfg["observation"]["modalities"]["obs"]["rgb"] = []
+        cfg["train"]["hdf5_cache_mode"] = "low_dim"
+    else:
+        cfg["observation"]["modalities"]["obs"]["rgb"] = RGB_KEYS[args.view]
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(cfg, indent=4) + "\n")
