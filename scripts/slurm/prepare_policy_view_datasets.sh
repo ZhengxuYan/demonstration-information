@@ -19,8 +19,10 @@ if [[ "${TARGET}" != "ph" && "${TARGET}" != "expert200" ]]; then
   exit 2
 fi
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate robodiff
+set -u
 
 REPO=/iris/u/jasonyan/repos/demonstration-information
 mkdir -p /iris/u/jasonyan/slurm

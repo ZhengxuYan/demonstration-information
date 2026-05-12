@@ -11,8 +11,10 @@
 
 set -euo pipefail
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate openx
+set -u
 
 SRC_ROOT="${SRC_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/expert200}"
 DST_ROOT="${DST_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/expert200_random_post_bc}"

@@ -24,8 +24,10 @@ if [[ "${VIEW}" != "agent_wrist" && "${VIEW}" != "left_close_low_wrist" ]]; then
   exit 2
 fi
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate openx
+set -u
 
 REPO=/iris/u/jasonyan/repos/demonstration-information
 RUN_NAME="expert200_random_post_bc_${ALGO}_${VIEW}_seed1"

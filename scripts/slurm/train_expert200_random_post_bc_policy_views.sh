@@ -24,8 +24,10 @@ if [[ "${VIEW}" != "agent_wrist" && "${VIEW}" != "left_close_low_wrist" ]]; then
   exit 2
 fi
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate openx
+set -u
 
 REPO=/iris/u/jasonyan/repos/demonstration-information
 DATASET_ROOT="${DATASET_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/expert200_random_post_bc}"

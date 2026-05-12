@@ -18,8 +18,10 @@ if [[ "${VIEW}" != "agent_wrist" && "${VIEW}" != "left_close_low_wrist" ]]; then
   exit 2
 fi
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate robodiff
+set -u
 
 DEMO_REPO=/iris/u/jasonyan/repos/demonstration-information
 DP_REPO=/iris/u/jasonyan/repos/diffusion_policy
