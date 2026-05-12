@@ -252,6 +252,8 @@ def main() -> None:
                     args.width,
                     model_xml=demo.attrs.get("model_file"),
                 )
+        if output_path.exists() and args.overwrite:
+            output_path.unlink()
         write_video(output_path, frames, args.fps)
 
     (args.out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
