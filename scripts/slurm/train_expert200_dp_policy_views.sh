@@ -46,7 +46,7 @@ cd "${DP_REPO}"
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 export EGL_DEVICE_ID=0
-export PYTHONPATH="${DP_REPO}:${PYTHONPATH:-}"
+export PYTHONPATH="${DP_REPO}"
 
 python - <<'PY'
 import inspect
