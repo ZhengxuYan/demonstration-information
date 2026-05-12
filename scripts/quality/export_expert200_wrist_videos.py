@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,14 @@ DEFAULT_FALLBACK = REPO_ROOT / "image.hdf5"
 DEFAULT_OUT = REPO_ROOT / "observability_annotation_app" / "videos" / "expert200_wrist"
 ROBOMIMIC_SOURCE = REPO_ROOT / "robomimic"
 ROBOSUITE_SITE_PACKAGES = REPO_ROOT / ".venv-robomimic" / "lib" / "python3.10" / "site-packages"
+
+
+def sanitize_model_xml_for_mujoco_py(model_xml: str | bytes | None) -> str | None:
+    if model_xml is None:
+        return None
+    if isinstance(model_xml, bytes):
+        model_xml = model_xml.decode("utf-8")
+    return re.sub(r'\scolorspace="[^"]*"', "", model_xml)
 
 
 def install_runtime_paths() -> None:
@@ -63,9 +72,8 @@ def render_wrist_frames(
     width: int,
     model_xml: str | bytes | None = None,
 ) -> np.ndarray:
+    model_xml = sanitize_model_xml_for_mujoco_py(model_xml)
     if model_xml is not None:
-        if isinstance(model_xml, bytes):
-            model_xml = model_xml.decode("utf-8")
         env.reset_to({"model": model_xml})
 
     frames = []

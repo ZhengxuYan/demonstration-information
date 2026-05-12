@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import types
@@ -19,6 +20,14 @@ from tqdm import tqdm
 
 LEFT_CLOSE_LOW_POS = np.asarray([0.42205740, -0.23999999, 1.15230719], dtype=np.float64)
 LEFT_CLOSE_LOW_QUAT_WXYZ = np.asarray([0.81392215, 0.36066498, 0.18452251, 0.41641680], dtype=np.float64)
+
+
+def sanitize_model_xml_for_mujoco_py(model_xml: str | bytes | None) -> str | None:
+    if model_xml is None:
+        return None
+    if isinstance(model_xml, bytes):
+        model_xml = model_xml.decode("utf-8")
+    return re.sub(r'\scolorspace="[^"]*"', "", model_xml)
 
 
 def parse_args() -> argparse.Namespace:
@@ -238,9 +247,8 @@ def render_required_observations(
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     import robosuite.utils.transform_utils as T
 
+    model_xml = sanitize_model_xml_for_mujoco_py(model_xml)
     if model_xml is not None:
-        if isinstance(model_xml, bytes):
-            model_xml = model_xml.decode("utf-8")
         env.reset_to({"model": model_xml})
 
     image_values: dict[str, list[np.ndarray]] = {}
