@@ -45,11 +45,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--start", type=int, default=1, help="1-based expert demo index to start from.")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--from-obs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Export existing obs/robot0_eye_in_hand_image frames when present. "
+        "Use --no-from-obs to replay simulator states instead.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
-def render_wrist_frames(env, states: np.ndarray, height: int, width: int) -> np.ndarray:
+def render_wrist_frames(
+    env,
+    states: np.ndarray,
+    height: int,
+    width: int,
+    model_xml: str | bytes | None = None,
+) -> np.ndarray:
+    if model_xml is not None:
+        if isinstance(model_xml, bytes):
+            model_xml = model_xml.decode("utf-8")
+        env.reset_to({"model": model_xml})
+
     frames = []
     for state in states:
         env.env.sim.set_state_from_flattened(state)
@@ -83,12 +101,20 @@ def main() -> None:
     print(f"loading metadata from {args.source}", flush=True)
     with h5py.File(args.source, "r") as f:
         demo_keys = sorted_demo_keys(f["data"])
-        env_meta = load_env_meta(f, args.source, args.env_meta_fallback)
+        has_wrist_obs = all(
+            "obs" in f["data"][demo_key] and "robot0_eye_in_hand_image" in f["data"][demo_key]["obs"]
+            for demo_key in demo_keys[:1]
+        )
+        env_meta = None if args.from_obs and has_wrist_obs else load_env_meta(f, args.source, args.env_meta_fallback)
 
-    print("creating robosuite env for wrist rendering", flush=True)
-    env = create_env(env_meta, args.height, args.width, ["robot0_eye_in_hand"])
-    print("resetting env", flush=True)
-    env.reset()
+    env = None
+    if env_meta is not None:
+        print("creating robosuite env for wrist rendering", flush=True)
+        env = create_env(env_meta, args.height, args.width, ["robot0_eye_in_hand"])
+        print("resetting env", flush=True)
+        env.reset()
+    else:
+        print("exporting existing obs/robot0_eye_in_hand_image frames", flush=True)
 
     selected = demo_keys[args.start - 1 :]
     if args.limit is not None:
@@ -104,8 +130,20 @@ def main() -> None:
         if output_path.exists() and not args.overwrite:
             continue
         with h5py.File(args.source, "r") as f:
-            states = f["data"][demo_key]["states"][:]
-        frames = render_wrist_frames(env, states, args.height, args.width)
+            demo = f["data"][demo_key]
+            if args.from_obs and "obs" in demo and "robot0_eye_in_hand_image" in demo["obs"]:
+                frames = demo["obs"]["robot0_eye_in_hand_image"][:]
+            else:
+                states = demo["states"][:]
+                if env is None:
+                    raise RuntimeError("state replay requested but env was not created")
+                frames = render_wrist_frames(
+                    env,
+                    states,
+                    args.height,
+                    args.width,
+                    model_xml=demo.attrs.get("model_file"),
+                )
         write_video(output_path, frames, args.fps)
 
     (args.out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

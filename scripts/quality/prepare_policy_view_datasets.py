@@ -234,8 +234,14 @@ def render_required_observations(
     need_image_key: bool,
     need_wrist: bool,
     need_lowdim: bool,
+    model_xml: str | bytes | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     import robosuite.utils.transform_utils as T
+
+    if model_xml is not None:
+        if isinstance(model_xml, bytes):
+            model_xml = model_xml.decode("utf-8")
+        env.reset_to({"model": model_xml})
 
     image_values: dict[str, list[np.ndarray]] = {}
     lowdim_values: dict[str, list[np.ndarray]] = {}
@@ -301,7 +307,15 @@ def render_required_observations(
     return stacked_images, stacked_lowdim
 
 
-def ensure_required_observations(demo_out, env, states: np.ndarray, image_key: str, height: int, width: int) -> None:
+def ensure_required_observations(
+    demo_out,
+    env,
+    states: np.ndarray,
+    image_key: str,
+    height: int,
+    width: int,
+    model_xml: str | bytes | None = None,
+) -> None:
     obs = demo_out.get("obs")
     need_image_key = obs is None or image_key not in obs
     need_wrist = obs is None or "robot0_eye_in_hand_image" not in obs
@@ -319,6 +333,7 @@ def ensure_required_observations(demo_out, env, states: np.ndarray, image_key: s
         need_image_key=need_image_key,
         need_wrist=need_wrist,
         need_lowdim=need_lowdim,
+        model_xml=model_xml,
     )
     for key, values in images.items():
         upsert_image_pair(demo_out, key, values)
@@ -398,7 +413,15 @@ def build_dataset(
             copy_group(src["data"][old_key], demo_out)
             if add_left_close_low or needs_generated_obs:
                 states = demo_out["states"][:]
-                ensure_required_observations(demo_out, env, states, image_key, render_height, render_width)
+                ensure_required_observations(
+                    demo_out,
+                    env,
+                    states,
+                    image_key,
+                    render_height,
+                    render_width,
+                    model_xml=demo_out.attrs.get("model_file"),
+                )
 
         write_masks(dst, new_demo_keys, valid_ratio=valid_ratio, seed=split_seed)
         dst.attrs["source_path"] = str(src_path)

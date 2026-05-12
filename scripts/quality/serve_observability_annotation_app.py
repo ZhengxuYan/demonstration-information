@@ -188,7 +188,14 @@ def build_rows(app_root: Path, export_ph: bool, fps: int) -> list[Row]:
         ep_idx = demo_index(path)
         wrist = EXPERT_WRIST_VIDEOS / f"demo_{ep_idx:04d}.mp4"
         if wrist.exists():
-            rows.append(Row("expert200", ep_idx, f"Expert demo_{ep_idx:03d}", (VideoRef("wrist", wrist),)))
+            rows.append(
+                Row(
+                    "expert200",
+                    ep_idx,
+                    f"Expert demo_{ep_idx:03d}",
+                    (VideoRef("wrist_replay", wrist), VideoRef("original", path)),
+                )
+            )
         else:
             rows.append(Row("expert200", ep_idx, f"Expert demo_{ep_idx:03d}", (VideoRef("video", path),)))
 
