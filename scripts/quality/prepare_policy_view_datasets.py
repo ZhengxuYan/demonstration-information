@@ -27,7 +27,8 @@ def sanitize_model_xml_for_mujoco_py(model_xml: str | bytes | None) -> str | Non
         return None
     if isinstance(model_xml, bytes):
         model_xml = model_xml.decode("utf-8")
-    return re.sub(r'\scolorspace="[^"]*"', "", model_xml)
+    model_xml = re.sub(r'\scolorspace="[^"]*"', "", model_xml)
+    return re.sub(r'(<light\b[^>]*?)\stype="directional"', r'\1 directional="true"', model_xml)
 
 
 def parse_args() -> argparse.Namespace:
