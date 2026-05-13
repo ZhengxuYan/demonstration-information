@@ -30,6 +30,14 @@ METRICS = [
     ("entropy_delta", "Entropy images+robot - Entropy robot"),
 ]
 
+LABEL_COLORS = {
+    "full": "#2563eb",
+    "partial": "#dc2626",
+    "label_1": "#2563eb",
+    "label_2": "#16a34a",
+    "label_3": "#dc2626",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -43,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Directory to scan recursively for Square MH demo_*_label_{1,2,3} videos.",
     )
-    parser.add_argument("--bins", type=int, default=30)
+    parser.add_argument("--bins", type=int, default=24)
     return parser.parse_args()
 
 
@@ -109,6 +117,42 @@ def histogram_curve(values: list[float], bins: np.ndarray) -> tuple[np.ndarray, 
     return centers, counts
 
 
+def compact_number(value: float) -> str:
+    abs_value = abs(value)
+    if abs_value >= 100:
+        return f"{value:.0f}"
+    if abs_value >= 10:
+        return f"{value:.1f}"
+    if abs_value >= 1:
+        return f"{value:.2f}"
+    return f"{value:.3g}"
+
+
+def compact_dataset_name(dataset: str) -> str:
+    return {
+        "expert200_random_post": "RP",
+        "square_ph": "PH",
+        "square_mh": "MH",
+    }.get(dataset, dataset)
+
+
+def compact_view_name(view: str) -> str:
+    return {
+        "agent_wrist": "agent+wrist",
+        "left_close_low_wrist": "left+wrist",
+    }.get(view, view)
+
+
+def compact_checkpoint_name(checkpoint_label: str) -> str:
+    return {
+        "best_validation": "best val",
+        "best_success": "best success",
+        "quartile_25": "q25",
+        "quartile_50": "q50",
+        "quartile_75": "q75",
+    }.get(checkpoint_label, checkpoint_label)
+
+
 def plot_metric(
     values_by_label: dict[str, list[float]],
     title: str,
@@ -126,21 +170,53 @@ def plot_metric(
     else:
         bins = np.linspace(all_values.min(), all_values.max(), bins_count + 1)
 
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    for label in sorted(non_empty):
-        xs, ys = histogram_curve(non_empty[label], bins)
-        ax.step(xs, ys, where="mid", linewidth=2, label=f"{label} (n={len(non_empty[label])})")
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Number of episodes")
-    ax.legend()
-    ax.grid(alpha=0.25)
-    fig.tight_layout()
+    plt.rcParams.update(
+        {
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.titleweight": "semibold",
+            "font.size": 8,
+        }
+    )
+
+    fig, ax = plt.subplots(figsize=(4.2, 2.55))
+    for i, label in enumerate(sorted(non_empty)):
+        values = non_empty[label]
+        counts, edges = np.histogram(np.asarray(values, dtype=np.float64), bins=bins)
+        color = LABEL_COLORS.get(label, f"C{i}")
+        arr = np.asarray(values, dtype=np.float64)
+        legend_label = f"{label} n{len(arr)} m{compact_number(float(arr.mean()))}"
+        ax.stairs(counts, edges, linewidth=1.7, color=color, label=legend_label)
+        ax.fill_between(
+            0.5 * (edges[:-1] + edges[1:]),
+            counts,
+            step="mid",
+            color=color,
+            alpha=0.10,
+            linewidth=0,
+        )
+        ax.axvline(float(arr.mean()), color=color, linewidth=1.0, linestyle=":", alpha=0.9)
+
+    ax.set_title(title, loc="left", fontsize=9, pad=3)
+    ax.set_xlabel(xlabel, labelpad=2)
+    ax.set_ylabel("Episodes", labelpad=2)
+    ax.tick_params(axis="both", labelsize=7, length=3, pad=1)
+    ax.legend(
+        loc="upper right",
+        frameon=False,
+        fontsize=6.8,
+        handlelength=1.8,
+        borderaxespad=0.2,
+        labelspacing=0.25,
+    )
+    ax.grid(axis="y", alpha=0.22, linewidth=0.7)
+    ax.margins(x=0.015, y=0.08)
+    fig.tight_layout(pad=0.45)
 
     png = output_base.with_suffix(".png")
     svg = output_base.with_suffix(".svg")
-    fig.savefig(png, dpi=180)
-    fig.savefig(svg)
+    fig.savefig(png, dpi=180, bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(svg, bbox_inches="tight", pad_inches=0.03)
     plt.close(fig)
     return png, svg
 
@@ -170,9 +246,10 @@ def write_html(output: Path, rows: list[dict[str, str]]) -> None:
         rel_png = Path(row["png"]).relative_to(output).as_posix()
         rel_svg = Path(row["svg"]).relative_to(output).as_posix()
         title = html.escape(row["title"])
+        meta = html.escape(row["summary"])
         cards.append(
-            f"<section><h2>{title}</h2><p>{html.escape(row['summary'])}</p>"
-            f"<a href='{html.escape(rel_svg)}'><img src='{html.escape(rel_png)}' alt='{title}'></a></section>"
+            f"<section><a href='{html.escape(rel_svg)}'><img src='{html.escape(rel_png)}' alt='{title}'></a>"
+            f"<h2>{title}</h2><p>{meta}</p></section>"
         )
     body = "\n".join(cards)
     (output / "index.html").write_text(
@@ -182,18 +259,66 @@ def write_html(output: Path, rows: list[dict[str, str]]) -> None:
   <meta charset="utf-8">
   <title>Policy NLL + Entropy Distributions</title>
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 28px; color: #17201b; }}
-    h1 {{ font-size: 24px; }}
-    section {{ border-top: 1px solid #d7ded8; padding: 20px 0; max-width: 920px; }}
-    h2 {{ font-size: 18px; margin: 0 0 6px; }}
-    p {{ color: #526057; margin: 0 0 12px; }}
-    img {{ width: min(860px, 100%); border: 1px solid #d7ded8; }}
+    :root {{ color-scheme: light; }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 18px;
+      color: #17201b;
+      background: #f8faf9;
+    }}
+    header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 0 14px;
+    }}
+    h1 {{ font-size: 19px; margin: 0; letter-spacing: 0; }}
+    header a {{ color: #2563eb; font-size: 12px; text-decoration: none; }}
+    main {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+      gap: 12px;
+      align-items: start;
+    }}
+    section {{
+      background: #ffffff;
+      border: 1px solid #d9e0db;
+      border-radius: 8px;
+      padding: 8px;
+      overflow: hidden;
+    }}
+    h2 {{
+      font-size: 11px;
+      line-height: 1.25;
+      margin: 7px 2px 2px;
+      font-weight: 650;
+      color: #17201b;
+    }}
+    p {{
+      color: #637067;
+      font-size: 10px;
+      line-height: 1.3;
+      margin: 0 2px 2px;
+    }}
+    img {{
+      display: block;
+      width: 100%;
+      border: 1px solid #e1e6e2;
+      border-radius: 5px;
+      background: #fff;
+    }}
   </style>
 </head>
 <body>
-  <h1>Policy NLL + Entropy Distributions</h1>
-  <p><a href="manifest_summary.csv">manifest_summary.csv</a></p>
-  {body}
+  <header>
+    <h1>Policy NLL + Entropy Distributions</h1>
+    <a href="manifest_summary.csv">manifest_summary.csv</a>
+  </header>
+  <main>
+    {body}
+  </main>
 </body>
 </html>
 """,
@@ -233,7 +358,7 @@ def main() -> None:
                 if bucket is not None:
                     values_by_label[bucket].append(float(value))
 
-            title = " / ".join(
+            full_title = " / ".join(
                 [
                     dataset,
                     row.get("policy", ""),
@@ -242,8 +367,16 @@ def main() -> None:
                     label,
                 ]
             )
-            stem = safe_name(title)
-            plotted = plot_metric(values_by_label, title, label, plot_dir / stem, args.bins)
+            plot_title = " · ".join(
+                [
+                    compact_dataset_name(dataset),
+                    row.get("policy", ""),
+                    compact_view_name(row.get("view", "")),
+                    compact_checkpoint_name(row.get("checkpoint_label", "")),
+                ]
+            )
+            stem = safe_name(f"{plot_title} · {label}")
+            plotted = plot_metric(values_by_label, plot_title, label, plot_dir / stem, args.bins)
             if plotted is None:
                 continue
             png, svg = plotted
@@ -251,7 +384,8 @@ def main() -> None:
                 {
                     "png": str(png),
                     "svg": str(svg),
-                    "title": title,
+                    "title": full_title,
+                    "plot_title": plot_title,
                     "summary": ", ".join(f"{k}: {len(v)} eps" for k, v in sorted(values_by_label.items())),
                 }
             )
@@ -274,7 +408,8 @@ def main() -> None:
                         "max": f"{arr.max():.8g}",
                         "png": str(png),
                         "svg": str(svg),
-                        "title": title,
+                        "title": full_title,
+                        "plot_title": plot_title,
                         "summary": ", ".join(f"{k}: {len(v)} eps" for k, v in sorted(values_by_label.items())),
                     }
                 )
@@ -295,6 +430,7 @@ def main() -> None:
         "png",
         "svg",
         "title",
+        "plot_title",
         "summary",
     ]
     with summary_path.open("w", newline="") as f:
