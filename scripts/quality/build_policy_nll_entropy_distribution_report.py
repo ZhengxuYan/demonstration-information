@@ -240,18 +240,71 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
+def checkpoint_sort_key(label: str) -> tuple[int, str]:
+    order = {
+        "best_validation": 0,
+        "best_success": 1,
+        "final": 2,
+        "quartile_25": 10,
+        "quartile_50": 11,
+        "quartile_75": 12,
+    }
+    return (order.get(label, 99), label)
+
+
+def is_extra_checkpoint(label: str) -> bool:
+    return label.startswith("quartile_")
+
+
 def write_html(output: Path, rows: list[dict[str, str]]) -> None:
-    cards = []
-    for row in rows:
+    def card(row: dict[str, str]) -> str:
         rel_png = Path(row["png"]).relative_to(output).as_posix()
         rel_svg = Path(row["svg"]).relative_to(output).as_posix()
         title = html.escape(row["title"])
         meta = html.escape(row["summary"])
-        cards.append(
+        checkpoint = html.escape(compact_checkpoint_name(row["checkpoint_label"]))
+        metric = html.escape(row["metric_label"])
+        return (
             f"<section><a href='{html.escape(rel_svg)}'><img src='{html.escape(rel_png)}' alt='{title}'></a>"
-            f"<h2>{title}</h2><p>{meta}</p></section>"
+            f"<h2><span>{checkpoint}</span>{metric}</h2><p>{meta}</p></section>"
         )
-    body = "\n".join(cards)
+
+    groups: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        groups[(row["dataset"], row["policy"], row["view"])].append(row)
+
+    group_sections = []
+    for (dataset, policy, view), group_rows in sorted(groups.items()):
+        group_rows = sorted(
+            group_rows,
+            key=lambda r: (checkpoint_sort_key(r["checkpoint_label"]), r["metric"], r["title"]),
+        )
+        primary_rows = [r for r in group_rows if not is_extra_checkpoint(r["checkpoint_label"])]
+        extra_rows = [r for r in group_rows if is_extra_checkpoint(r["checkpoint_label"])]
+        title = html.escape(
+            " · ".join(
+                [
+                    compact_dataset_name(dataset),
+                    policy,
+                    compact_view_name(view),
+                ]
+            )
+        )
+        primary_cards = "\n".join(card(row) for row in primary_rows)
+        details = ""
+        if extra_rows:
+            extra_cards = "\n".join(card(row) for row in extra_rows)
+            details = (
+                f"<details><summary>Training-stage checkpoints "
+                f"({len(extra_rows)} plots: q25/q50/q75)</summary>"
+                f"<div class='plot-grid'>{extra_cards}</div></details>"
+            )
+        group_sections.append(
+            f"<article><h2 class='group-title'>{title}</h2>"
+            f"<div class='plot-grid'>{primary_cards}</div>{details}</article>"
+        )
+
+    body = "\n".join(group_sections)
     (output / "index.html").write_text(
         f"""<!doctype html>
 <html>
@@ -276,25 +329,46 @@ def write_html(output: Path, rows: list[dict[str, str]]) -> None:
     }}
     h1 {{ font-size: 19px; margin: 0; letter-spacing: 0; }}
     header a {{ color: #2563eb; font-size: 12px; text-decoration: none; }}
-    main {{
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-      gap: 12px;
-      align-items: start;
-    }}
-    section {{
+    main {{ display: grid; gap: 18px; }}
+    article {{
       background: #ffffff;
       border: 1px solid #d9e0db;
       border-radius: 8px;
+      padding: 12px;
+    }}
+    .group-title {{
+      font-size: 14px;
+      margin: 0 0 10px;
+      font-weight: 700;
+      color: #17201b;
+    }}
+    .plot-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 10px;
+      align-items: start;
+    }}
+    section {{
+      border: 1px solid #d9e0db;
+      border-radius: 6px;
       padding: 8px;
       overflow: hidden;
+      background: #ffffff;
     }}
-    h2 {{
+    section h2 {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
       font-size: 11px;
       line-height: 1.25;
       margin: 7px 2px 2px;
       font-weight: 650;
       color: #17201b;
+    }}
+    section h2 span {{
+      color: #47534b;
+      font-weight: 700;
+      white-space: nowrap;
     }}
     p {{
       color: #637067;
@@ -308,6 +382,19 @@ def write_html(output: Path, rows: list[dict[str, str]]) -> None:
       border: 1px solid #e1e6e2;
       border-radius: 5px;
       background: #fff;
+    }}
+    details {{
+      margin-top: 11px;
+      border-top: 1px solid #e4e9e5;
+      padding-top: 9px;
+    }}
+    summary {{
+      cursor: pointer;
+      color: #2563eb;
+      font-size: 12px;
+      font-weight: 650;
+      margin-bottom: 10px;
+      user-select: none;
     }}
   </style>
 </head>
@@ -384,6 +471,12 @@ def main() -> None:
                 {
                     "png": str(png),
                     "svg": str(svg),
+                    "dataset": dataset,
+                    "policy": row.get("policy", ""),
+                    "view": row.get("view", ""),
+                    "checkpoint_label": row.get("checkpoint_label", ""),
+                    "metric": metric,
+                    "metric_label": label,
                     "title": full_title,
                     "plot_title": plot_title,
                     "summary": ", ".join(f"{k}: {len(v)} eps" for k, v in sorted(values_by_label.items())),
