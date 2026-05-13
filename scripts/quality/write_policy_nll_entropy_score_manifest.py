@@ -53,7 +53,17 @@ def discover_runs(root: Path) -> list[Path]:
     return [path for path in root.iterdir() if path.is_dir()]
 
 
-def find_run(runs: list[Path], dataset: str, policy: str, view: str | None, state_only: bool) -> Path | None:
+def run_checkpoints(run_dir: Path) -> list[Path]:
+    return [p for p in sorted(run_dir.glob("*/models/*.pth")) if p.name.endswith(".pth")]
+
+
+def find_run(
+    runs: list[Path],
+    dataset: str,
+    policy: str,
+    view: str | None,
+    state_only: bool,
+) -> tuple[Path | None, bool]:
     candidates = []
     for path in runs:
         name = path.name
@@ -65,9 +75,14 @@ def find_run(runs: list[Path], dataset: str, policy: str, view: str | None, stat
             continue
         candidates.append(path)
     if not candidates:
-        return None
+        return None, False
+    candidates_with_ckpts = [path for path in candidates if run_checkpoints(path)]
+    if not candidates_with_ckpts:
+        candidates.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+        return candidates[0], False
+    candidates = candidates_with_ckpts
     candidates.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
-    return candidates[0]
+    return candidates[0], True
 
 
 def epoch_num(path: Path) -> int | None:
@@ -102,8 +117,7 @@ def best_success_checkpoint(run_dir: Path, rollout_root: Path) -> Path | None:
 
 
 def select_checkpoints(run_dir: Path, rollout_root: Path) -> dict[str, Path]:
-    checkpoints = sorted(run_dir.glob("*/models/*.pth"))
-    checkpoints = [p for p in checkpoints if p.name.endswith(".pth")]
+    checkpoints = run_checkpoints(run_dir)
     if not checkpoints:
         return {}
     by_label: dict[str, Path] = {}
@@ -152,15 +166,21 @@ def main() -> None:
 
     for dataset in DATASETS:
         for policy in POLICIES:
-            robot_run = find_run(runs, dataset, policy, view=None, state_only=True)
+            robot_run, robot_has_ckpts = find_run(runs, dataset, policy, view=None, state_only=True)
             if robot_run is None:
                 missing[f"{dataset}/{policy}"].append("state_only")
                 continue
+            if not robot_has_ckpts:
+                missing[f"{dataset}/{policy}"].append(f"state_only_no_checkpoints:{robot_run.name}")
+                continue
             robot_ckpts = select_checkpoints(robot_run, args.rollout_root)
             for view in VIEWS:
-                image_run = find_run(runs, dataset, policy, view=view, state_only=False)
+                image_run, image_has_ckpts = find_run(runs, dataset, policy, view=view, state_only=False)
                 if image_run is None:
                     missing[f"{dataset}/{policy}/{view}"].append("image_run")
+                    continue
+                if not image_has_ckpts:
+                    missing[f"{dataset}/{policy}/{view}"].append(f"image_run_no_checkpoints:{image_run.name}")
                     continue
                 image_ckpts = select_checkpoints(image_run, args.rollout_root)
                 labels = sorted(set(image_ckpts) & set(robot_ckpts))
