@@ -55,6 +55,22 @@ def soft_discrete_nll_from_logits(
     return -(targets * log_probs).sum(dim=-1).sum(dim=-1)
 
 
+def discrete_entropy_from_logits(logits: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
+    """Return categorical policy entropy summed over action dimensions.
+
+    Args:
+        logits: Tensor shaped ``(..., action_dim, num_bins)``.
+        actions: Optional action tensor used only to align transformer logits that
+            still include a singleton time dimension.
+    """
+    if actions is not None:
+        target_bins = torch.empty(actions.shape, device=actions.device, dtype=torch.long)
+        logits = _align_logits_to_targets(logits, target_bins)
+    log_probs = F.log_softmax(logits, dim=-1)
+    probs = torch.exp(log_probs)
+    return -(probs * log_probs).sum(dim=-1).sum(dim=-1)
+
+
 def _align_logits_to_targets(logits: torch.Tensor, target_bins: torch.Tensor) -> torch.Tensor:
     if logits.ndim == target_bins.ndim + 2 and logits.shape[1] == 1 and target_bins.ndim == 2:
         return logits[:, -1]

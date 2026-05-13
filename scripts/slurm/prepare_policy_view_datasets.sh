@@ -14,8 +14,8 @@
 set -euo pipefail
 
 TARGET="${1:-ph}"
-if [[ "${TARGET}" != "ph" && "${TARGET}" != "expert200" ]]; then
-  echo "Usage: sbatch $0 ph|expert200"
+if [[ "${TARGET}" != "ph" && "${TARGET}" != "mh" && "${TARGET}" != "expert200" ]]; then
+  echo "Usage: sbatch $0 ph|mh|expert200"
   exit 2
 fi
 
@@ -42,6 +42,9 @@ if [[ "${TARGET}" == "expert200" && -n "${EXPERT200_SOURCE:-}" ]]; then
 fi
 if [[ "${TARGET}" == "expert200" && -n "${EXPERT200_NUM_DEMOS:-}" ]]; then
   EXTRA_ARGS+=(--expert200-num-demos "${EXPERT200_NUM_DEMOS}")
+fi
+if [[ "${TARGET}" == "mh" && -n "${MH_IMAGE:-}" ]]; then
+  EXTRA_ARGS+=(--mh-image "${MH_IMAGE}")
 fi
 
 python scripts/quality/prepare_policy_view_datasets.py "${TARGET}" --overwrite "${EXTRA_ARGS[@]}"
@@ -90,6 +93,30 @@ if [[ "${TARGET}" == "ph" ]]; then
   python scripts/quality/verify_policy_view_dataset.py \
     /iris/u/jasonyan/data/policy_view_experiments/square_ph/square_ph_left_close_low_wrist_image_abs_50_seed42.hdf5 \
     --expected-demos 50 \
+    --expected-action-dim 7 \
+    --required-obs-key left_close_low_image \
+    --required-obs-key robot0_eye_in_hand_image \
+    --required-obs-key robot0_eef_pos \
+    --required-obs-key robot0_eef_quat \
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape left_close_low_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
+elif [[ "${TARGET}" == "mh" ]]; then
+  EXPECTED_MH_DEMOS="${EXPECTED_MH_DEMOS:-300}"
+  python scripts/quality/verify_policy_view_dataset.py \
+    /iris/u/jasonyan/data/policy_view_experiments/square_mh/square_mh_agent_wrist_image.hdf5 \
+    --expected-demos "${EXPECTED_MH_DEMOS}" \
+    --expected-action-dim 7 \
+    --required-obs-key agentview_image \
+    --required-obs-key robot0_eye_in_hand_image \
+    --required-obs-key robot0_eef_pos \
+    --required-obs-key robot0_eef_quat \
+    --required-obs-key robot0_gripper_qpos \
+    --expected-obs-shape agentview_image=84,84,3 \
+    "${COMMON_OBS_SHAPE_ARGS[@]}"
+  python scripts/quality/verify_policy_view_dataset.py \
+    /iris/u/jasonyan/data/policy_view_experiments/square_mh/square_mh_left_close_low_wrist_image.hdf5 \
+    --expected-demos "${EXPECTED_MH_DEMOS}" \
     --expected-action-dim 7 \
     --required-obs-key left_close_low_image \
     --required-obs-key robot0_eye_in_hand_image \

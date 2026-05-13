@@ -45,6 +45,7 @@ REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 CONFIG_DIR="${CONFIG_DIR:-/iris/u/jasonyan/data/policy_view_experiments/configs/robomimic}"
 OUTPUT_DIR="${OUTPUT_DIR:-/iris/u/jasonyan/data/robomimic_outputs/policy_view_experiments}"
 PH_ROOT="${PH_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/square_ph}"
+MH_ROOT="${MH_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/square_mh}"
 MH_DATASET="${MH_DATASET:-/iris/u/jasonyan/data/robomimic/square/mh/image.hdf5}"
 EXPERT_ROOT="${EXPERT_ROOT:-/iris/u/jasonyan/data/policy_view_experiments/expert200_random_post_bc}"
 NUM_EPOCHS="${NUM_EPOCHS:-2000}"
@@ -179,6 +180,14 @@ train_original() {
     write_and_train square_ph "${policy}" left_close_low_wrist image_state \
       "${PH_ROOT}/square_ph_left_close_low_wrist_image.hdf5" \
       "square_ph_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
+  fi
+  if want_dataset mh; then
+    write_and_train square_mh "${policy}" agent_wrist image_state \
+      "${MH_ROOT}/square_mh_agent_wrist_image.hdf5" \
+      "square_mh_bc_nonabs_${algo_name}_agent_wrist_seed1"
+    write_and_train square_mh "${policy}" left_close_low_wrist image_state \
+      "${MH_ROOT}/square_mh_left_close_low_wrist_image.hdf5" \
+      "square_mh_bc_nonabs_${algo_name}_left_close_low_wrist_seed1"
   fi
   if want_dataset expert200; then
     write_and_train expert200_random_post "${policy}" agent_wrist image_state \

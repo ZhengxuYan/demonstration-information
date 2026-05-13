@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare policy-view HDF5 datasets for Square PH and expert200 experiments."""
+"""Prepare policy-view HDF5 datasets for Square PH, MH, and expert200 experiments."""
 
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ def reset_env_to_model(env, model_xml: str | bytes | None) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("dataset", choices=["ph", "expert200", "random_post"])
+    parser.add_argument("dataset", choices=["ph", "mh", "expert200", "random_post"])
     parser.add_argument("--out-root", type=Path, default=Path("/iris/u/jasonyan/data/policy_view_experiments"))
     parser.add_argument(
         "--ph-image",
@@ -145,6 +145,11 @@ def parse_args() -> argparse.Namespace:
         "--ph-image-abs",
         type=Path,
         default=Path("/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image_abs.hdf5"),
+    )
+    parser.add_argument(
+        "--mh-image",
+        type=Path,
+        default=Path("/iris/u/jasonyan/data/robomimic/square/mh/image.hdf5"),
     )
     parser.add_argument("--expert200-zip", type=Path, default=None)
     parser.add_argument("--expert200-source", type=Path, default=None)
@@ -587,6 +592,29 @@ def prepare_ph(args: argparse.Namespace) -> None:
     build_dataset(args.ph_image_abs, out / "square_ph_left_close_low_wrist_image_abs_50_seed42.hdf5", selected, True, args.render_height, args.render_width, args.overwrite)
 
 
+def prepare_mh(args: argparse.Namespace) -> None:
+    out = args.out_root / "square_mh"
+    validate_source(args.mh_image, expected_action_dim=7)
+    build_dataset(
+        args.mh_image,
+        out / "square_mh_agent_wrist_image.hdf5",
+        None,
+        False,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+    )
+    build_dataset(
+        args.mh_image,
+        out / "square_mh_left_close_low_wrist_image.hdf5",
+        None,
+        True,
+        args.render_height,
+        args.render_width,
+        args.overwrite,
+    )
+
+
 def prepare_expert200(args: argparse.Namespace) -> None:
     out = args.out_root / "expert200"
     src = find_expert200_source(args)
@@ -663,6 +691,8 @@ def main() -> None:
     args = parse_args()
     if args.dataset == "ph":
         prepare_ph(args)
+    elif args.dataset == "mh":
+        prepare_mh(args)
     elif args.dataset == "expert200":
         prepare_expert200(args)
     else:
