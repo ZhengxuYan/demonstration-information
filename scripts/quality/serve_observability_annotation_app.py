@@ -140,6 +140,44 @@ def write_video(video_path: Path, frames: np.ndarray, fps: int) -> None:
         raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
 
 
+def transcode_browser_video(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        return
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required to transcode DROID videos")
+
+    tmp = dst.with_suffix(".tmp.mp4")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-an",
+        "-vf",
+        "scale=640:-2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-movflags",
+        "+faststart",
+        "-pix_fmt",
+        "yuv420p",
+        str(tmp),
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if proc.returncode != 0:
+        if tmp.exists():
+            tmp.unlink()
+        raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
+    tmp.replace(dst)
+
+
 def export_missing_ph_videos(app_root: Path, fps: int) -> None:
     generated_dir = app_root / "videos" / "square_ph"
     missing = [
@@ -201,7 +239,7 @@ def droid_h5_metadata(path: Path) -> tuple[int, str]:
     return frames, task
 
 
-def droid_rows(root: Path) -> list[Row]:
+def droid_rows(root: Path, app_root: Path | None = None) -> list[Row]:
     rows: list[Row] = []
     for traj_path in sorted(root.glob("*/*/trajectory.h5")):
         session_dir = traj_path.parent
@@ -215,13 +253,25 @@ def droid_rows(root: Path) -> list[Row]:
             continue
         ep_idx = len(rows) + 1
         date = traj_path.parents[1].name
-        refs = tuple(VideoRef(path.stem, path) for path in videos)
+        refs = []
+        for path in videos:
+            video_path = path
+            if app_root is not None:
+                rel_parts = traj_path.relative_to(root).parent.parts
+                out_name = f"{path.stem}.mp4"
+                video_path = app_root / "videos" / "droid_success" / Path(*rel_parts) / out_name
+                try:
+                    transcode_browser_video(path, video_path)
+                except Exception as exc:
+                    print(f"Failed to transcode {path}: {exc}")
+                    video_path = path
+            refs.append(VideoRef(path.stem, video_path))
         rows.append(
             Row(
                 "droid_success",
                 ep_idx,
                 f"DROID {ep_idx:03d} · {date} · {task} · {frames} frames",
-                refs,
+                tuple(refs),
             )
         )
     return rows
@@ -235,7 +285,7 @@ def build_rows(
     droid_only: bool = False,
 ) -> list[Row]:
     if droid_only:
-        return droid_rows(droid_success_root or DROID_SUCCESS_ROOT)
+        return droid_rows(droid_success_root or DROID_SUCCESS_ROOT, app_root=app_root)
 
     if export_ph:
         export_missing_ph_videos(app_root, fps)
@@ -273,7 +323,7 @@ def build_rows(
             rows.append(Row("expert200", ep_idx, f"Expert demo_{ep_idx:03d}", (VideoRef("video", path),)))
 
     if droid_success_root is not None:
-        rows.extend(droid_rows(droid_success_root))
+        rows.extend(droid_rows(droid_success_root, app_root=app_root))
 
     return rows
 
