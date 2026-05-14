@@ -41,6 +41,7 @@ EXPERT_VIDEO_ROOT = REPO_ROOT / "expert200"
 APP_ROOT = REPO_ROOT / "observability_annotation_app"
 EXPERT_WRIST_VIDEOS = APP_ROOT / "videos" / "expert200_wrist"
 OUTPUT_CSV = REPO_ROOT / "observability_annotations.csv"
+DROID_SUCCESS_ROOT = Path("/Users/jasonyan/Desktop/droid-main/data/success")
 
 PH_WRIST_KEY = "robot0_eye_in_hand_image"
 MH_WRIST_KEY = "robot0_eye_in_hand_image"
@@ -69,6 +70,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-csv", type=Path, default=OUTPUT_CSV)
     parser.add_argument("--app-root", type=Path, default=APP_ROOT)
     parser.add_argument("--fps", type=int, default=20)
+    parser.add_argument(
+        "--droid-success-root",
+        type=Path,
+        default=None,
+        help="Optional DROID success trajectory root containing date/session/trajectory.h5.",
+    )
+    parser.add_argument(
+        "--droid-only",
+        action="store_true",
+        help="Only serve DROID success trajectories.",
+    )
     parser.add_argument(
         "--no-export-missing-ph",
         action="store_true",
@@ -163,7 +175,68 @@ def export_hdf5_wrist_video(hdf5_path: Path, ep_idx: int, output_path: Path, fps
     write_video(output_path, frames, fps)
 
 
-def build_rows(app_root: Path, export_ph: bool, fps: int) -> list[Row]:
+def droid_mp4_paths(session_dir: Path) -> list[Path]:
+    preferred = sorted((session_dir / "recordings" / "MP4").glob("*.mp4"))
+    if preferred:
+        return preferred
+    return sorted((session_dir / "recordings" / "H264").glob("*.mp4"))
+
+
+def droid_h5_metadata(path: Path) -> tuple[int, str]:
+    with h5py.File(path, "r") as f:
+        new_tasks = f.attrs.get("new_tasks", [])
+        if hasattr(new_tasks, "tolist"):
+            new_tasks = new_tasks.tolist()
+        if new_tasks:
+            task = str(new_tasks[0])
+        else:
+            task = str(f.attrs.get("current_task", "droid task"))
+        task = " ".join(task.split())
+        if "action/cartesian_position" in f:
+            frames = int(f["action/cartesian_position"].shape[0])
+        elif "observation/robot_state/cartesian_position" in f:
+            frames = int(f["observation/robot_state/cartesian_position"].shape[0])
+        else:
+            frames = 0
+    return frames, task
+
+
+def droid_rows(root: Path) -> list[Row]:
+    rows: list[Row] = []
+    for traj_path in sorted(root.glob("*/*/trajectory.h5")):
+        session_dir = traj_path.parent
+        videos = droid_mp4_paths(session_dir)
+        if not videos:
+            continue
+        try:
+            frames, task = droid_h5_metadata(traj_path)
+        except OSError as exc:
+            print(f"Skipping unreadable DROID trajectory {traj_path}: {exc}")
+            continue
+        ep_idx = len(rows) + 1
+        date = traj_path.parents[1].name
+        refs = tuple(VideoRef(path.stem, path) for path in videos)
+        rows.append(
+            Row(
+                "droid_success",
+                ep_idx,
+                f"DROID {ep_idx:03d} · {date} · {task} · {frames} frames",
+                refs,
+            )
+        )
+    return rows
+
+
+def build_rows(
+    app_root: Path,
+    export_ph: bool,
+    fps: int,
+    droid_success_root: Path | None = None,
+    droid_only: bool = False,
+) -> list[Row]:
+    if droid_only:
+        return droid_rows(droid_success_root or DROID_SUCCESS_ROOT)
+
     if export_ph:
         export_missing_ph_videos(app_root, fps)
 
@@ -198,6 +271,9 @@ def build_rows(app_root: Path, export_ph: bool, fps: int) -> list[Row]:
             )
         else:
             rows.append(Row("expert200", ep_idx, f"Expert demo_{ep_idx:03d}", (VideoRef("video", path),)))
+
+    if droid_success_root is not None:
+        rows.extend(droid_rows(droid_success_root))
 
     return rows
 
@@ -276,7 +352,12 @@ def annotation_key(dataset: str, ep_idx: int) -> str:
     return f"{dataset}:{ep_idx}"
 
 
-def make_handler(rows: list[Row], annotations: dict[tuple[str, int], dict[str, str]], output_csv: Path):
+def make_handler(
+    rows: list[Row],
+    annotations: dict[tuple[str, int], dict[str, str]],
+    output_csv: Path,
+    media_roots: list[Path] | None = None,
+):
     row_by_key = {(row.dataset, row.ep_idx): row for row in rows}
 
     class Handler(BaseHTTPRequestHandler):
@@ -369,6 +450,8 @@ def make_handler(rows: list[Row], annotations: dict[tuple[str, int], dict[str, s
                 return
             path = Path(values[0]).resolve()
             allowed_roots = [REPO_ROOT.resolve(), APP_ROOT.resolve()]
+            if media_roots:
+                allowed_roots.extend(root.resolve() for root in media_roots)
             if not any(path == root or root in path.parents for root in allowed_roots):
                 self.send_error(HTTPStatus.FORBIDDEN)
                 return
@@ -802,6 +885,7 @@ INDEX_HTML = r"""<!doctype html>
       square_ph: "Square PH",
       square_mh: "Square MH",
       expert200: "Expert200",
+      droid_success: "DROID Success",
     };
     const LABELS = ["full", "partial", "unsure", "unusable", "unlabeled"];
     const SHORTCUTS = { f: "full", p: "partial", u: "unsure", x: "unusable", e: "unlabeled" };
@@ -1067,7 +1151,13 @@ INDEX_HTML = r"""<!doctype html>
 def main() -> None:
     args = parse_args()
     args.app_root.mkdir(parents=True, exist_ok=True)
-    rows = build_rows(args.app_root, export_ph=not args.no_export_missing_ph, fps=args.fps)
+    rows = build_rows(
+        args.app_root,
+        export_ph=(not args.no_export_missing_ph and not args.droid_only),
+        fps=args.fps,
+        droid_success_root=args.droid_success_root,
+        droid_only=args.droid_only,
+    )
     annotations = read_annotations(args.output_csv)
     write_annotations(args.output_csv, rows, annotations)
 
@@ -1076,7 +1166,10 @@ def main() -> None:
     print(f"Saving annotations to: {args.output_csv}")
     print(f"Open: http://{args.host}:{args.port}")
 
-    handler = make_handler(rows, annotations, args.output_csv)
+    media_roots = []
+    if args.droid_success_root is not None or args.droid_only:
+        media_roots.append((args.droid_success_root or DROID_SUCCESS_ROOT).resolve())
+    handler = make_handler(rows, annotations, args.output_csv, media_roots=media_roots)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     try:
         server.serve_forever()
