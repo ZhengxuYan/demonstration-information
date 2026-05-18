@@ -390,9 +390,12 @@ def upgrade_controller_config(env_meta: dict) -> dict:
     Robomimic Square datasets were produced with robosuite's older part-controller
     config format. Newer robosuite releases expect a composite-controller config.
     """
-    from robosuite.controllers.composite.composite_controller_factory import (
-        refactor_composite_controller_config,
-    )
+    try:
+        from robosuite.controllers.composite.composite_controller_factory import (
+            refactor_composite_controller_config,
+        )
+    except Exception:
+        return env_meta
 
     env_meta = copy.deepcopy(env_meta)
     env_kwargs = env_meta["env_kwargs"]
