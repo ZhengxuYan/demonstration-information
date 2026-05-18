@@ -1,5 +1,5 @@
 """
-Render one Square PH rollout from multiple front-facing third-person camera views.
+Render Square PH rollouts from many front-facing third-person camera views.
 
 This is intended for quickly previewing candidate camera poses before regenerating
 the whole dataset with mixed third-person views.
@@ -11,8 +11,10 @@ conda activate openx
 
 python scripts/quality/render_square_ph_custom_views.py \
   --dataset /iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5 \
-  --demo-idx 0 \
-  --output-dir /iris/u/jasonyan/data/camera_view_previews/square_ph_demo0
+  --annotations-csv /iris/u/jasonyan/data/square_ph_observability_annotations.csv \
+  --demos-per-label 5 \
+  --output-dir /iris/u/jasonyan/data/camera_view_previews/square_ph_many_views \
+  --num-candidate-views 50
 """
 
 from __future__ import annotations
@@ -27,13 +29,6 @@ from pathlib import Path
 import h5py
 import imageio
 import numpy as np
-import robomimic.utils.env_utils as EnvUtils
-import robomimic.utils.obs_utils as ObsUtils
-import robosuite
-import robosuite.utils.transform_utils as T
-from robosuite.controllers.composite.composite_controller_factory import (
-    refactor_composite_controller_config,
-)
 
 
 CORRECTION = np.array(
@@ -53,10 +48,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-width", type=int, default=256)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--max-frames", type=int, default=0, help="0 means render the full demo.")
+    parser.add_argument(
+        "--view-mode",
+        choices=["systematic", "legacy"],
+        default="systematic",
+        help="systematic renders agentview plus a sampled grid; legacy renders the original 8 hand-picked views.",
+    )
+    parser.add_argument(
+        "--num-candidate-views",
+        type=int,
+        default=50,
+        help="Number of non-agentview systematic candidate views to render.",
+    )
     return parser.parse_args()
 
 
 def initialize_obs_utils() -> None:
+    import robomimic.utils.obs_utils as ObsUtils
+
     dummy_spec = dict(obs=dict(low_dim=["robot0_eef_pos"], rgb=[]))
     ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 
@@ -81,6 +90,8 @@ def look_at_rotation(camera_pos: np.ndarray, target_pos: np.ndarray, world_up: n
 
 
 def corrected_rot_to_mujoco_quat(corrected_rot: np.ndarray) -> np.ndarray:
+    import robosuite.utils.transform_utils as T
+
     raw_rot = corrected_rot @ CORRECTION
     quat_xyzw = T.mat2quat(raw_rot)
     quat_wxyz = quat_xyzw[[3, 0, 1, 2]]
@@ -102,10 +113,43 @@ def current_agentview_pose(env, camera_name: str = "agentview") -> tuple[np.ndar
     return base_pos, corrected_rot
 
 
-def view_specs(base_pos: np.ndarray, base_rot: np.ndarray) -> list[dict[str, object]]:
+def _axis_tag(value: float, scale: int = 100) -> str:
+    scaled = int(round(abs(value) * scale))
+    if scaled == 0:
+        return "0"
+    return ("p" if value > 0 else "m") + f"{scaled:02d}"
+
+
+def _finalize_view_specs(specs: list[dict[str, object]]) -> list[dict[str, object]]:
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    finalized = []
+    seen_names = set()
+    for spec in specs:
+        name = str(spec["name"])
+        if name in seen_names:
+            raise ValueError(f"Duplicate view name: {name}")
+        seen_names.add(name)
+        pos = np.asarray(spec["pos"], dtype=np.float64)
+        target = np.asarray(spec["target"], dtype=np.float64)
+        rot = look_at_rotation(pos, target, world_up)
+        quat_wxyz = corrected_rot_to_mujoco_quat(rot)
+        finalized.append(
+            {
+                **spec,
+                "name": name,
+                "obs_key": "agentview_image" if name == "agentview" else f"{name}_image",
+                "pos": pos,
+                "target": target,
+                "rot": rot,
+                "quat_wxyz": quat_wxyz,
+            }
+        )
+    return finalized
+
+
+def legacy_view_specs(base_pos: np.ndarray, base_rot: np.ndarray) -> list[dict[str, object]]:
     base_right = normalize(base_rot[:, 0])
     base_forward = normalize(base_rot[:, 2])
-    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
     work_target = base_pos + 0.58 * base_forward + np.array([0.0, 0.0, -0.08], dtype=np.float64)
 
     specs = [
@@ -151,9 +195,97 @@ def view_specs(base_pos: np.ndarray, base_rot: np.ndarray) -> list[dict[str, obj
             target=work_target + np.array([0.0, 0.0, -0.08]),
         ),
     ]
-    for spec in specs:
-        spec["rot"] = look_at_rotation(np.asarray(spec["pos"]), np.asarray(spec["target"]), world_up)
-    return specs
+    return _finalize_view_specs(specs)
+
+
+def systematic_view_specs(base_pos: np.ndarray, base_rot: np.ndarray, num_candidate_views: int) -> list[dict[str, object]]:
+    if num_candidate_views < 1:
+        raise ValueError(f"--num-candidate-views must be positive; got {num_candidate_views}")
+
+    base_right = normalize(base_rot[:, 0])
+    base_forward = normalize(base_rot[:, 2])
+    work_target = base_pos + 0.58 * base_forward + np.array([0.0, 0.0, -0.08], dtype=np.float64)
+
+    candidates = []
+    for lateral in (-0.30, -0.22, -0.14, -0.06, 0.06, 0.14, 0.22, 0.30):
+        for forward in (-0.02, 0.04, 0.10, 0.16):
+            for height in (-0.16, -0.08, 0.00, 0.08):
+                for target_z in (-0.10, -0.04, 0.02):
+                    abs_lat = abs(lateral)
+                    abs_height = abs(height)
+                    # This ranks views from moderate to aggressive while preserving
+                    # coverage across left/right, high/low, near/far, and aim height.
+                    severity = (
+                        1.5 * abs_lat
+                        + 0.9 * abs_height
+                        + 0.45 * max(forward, 0.0)
+                        + 0.35 * abs(target_z + 0.04)
+                    )
+                    candidates.append(
+                        {
+                            "lateral": lateral,
+                            "forward": forward,
+                            "height": height,
+                            "target_z": target_z,
+                            "severity": severity,
+                        }
+                    )
+
+    candidates.sort(
+        key=lambda item: (
+            item["severity"],
+            abs(item["lateral"]),
+            abs(item["height"]),
+            item["forward"],
+            item["target_z"],
+            item["lateral"],
+        )
+    )
+
+    if num_candidate_views >= len(candidates):
+        selected = candidates
+    else:
+        # Evenly sample the ranked space, then sort by side and offsets to make
+        # the page easier to scan visually.
+        idxs = np.linspace(0, len(candidates) - 1, num_candidate_views, dtype=int)
+        selected = [candidates[int(idx)] for idx in idxs]
+    selected.sort(key=lambda item: (item["lateral"], item["forward"], item["height"], item["target_z"]))
+
+    specs: list[dict[str, object]] = [dict(name="agentview", pos=base_pos, target=work_target)]
+    for idx, item in enumerate(selected, start=1):
+        lateral = item["lateral"]
+        forward = item["forward"]
+        height = item["height"]
+        target_z = item["target_z"]
+        name = (
+            f"view_{idx:02d}"
+            f"_lat{_axis_tag(lateral)}"
+            f"_fwd{_axis_tag(forward)}"
+            f"_z{_axis_tag(height)}"
+            f"_aim{_axis_tag(target_z)}"
+        )
+        specs.append(
+            dict(
+                name=name,
+                pos=base_pos + lateral * base_right + forward * base_forward + np.array([0.0, 0.0, height]),
+                target=work_target + np.array([0.0, 0.0, target_z]),
+                lateral_offset=lateral,
+                forward_offset=forward,
+                height_offset=height,
+                target_z_offset=target_z,
+                severity=item["severity"],
+            )
+        )
+
+    return _finalize_view_specs(specs)
+
+
+def view_specs(base_pos: np.ndarray, base_rot: np.ndarray, mode: str, num_candidate_views: int) -> list[dict[str, object]]:
+    if mode == "legacy":
+        return legacy_view_specs(base_pos, base_rot)
+    if mode == "systematic":
+        return systematic_view_specs(base_pos, base_rot, num_candidate_views)
+    raise ValueError(f"Unsupported view mode: {mode}")
 
 
 def load_demo(path: Path, demo_idx: int) -> tuple[dict, np.ndarray]:
@@ -205,6 +337,8 @@ def rewrite_legacy_model_xml(model_xml: str) -> str:
     need geometrically reasonable robot meshes, so legacy *_vis.stl files are mapped
     to the corresponding collision STL meshes that still exist locally.
     """
+    import robosuite
+
     robosuite_root = Path(robosuite.__file__).resolve().parent
     assets_root = robosuite_root / "models" / "assets"
 
@@ -240,6 +374,10 @@ def upgrade_controller_config(env_meta: dict) -> dict:
     Robomimic Square datasets were produced with robosuite's older part-controller
     config format. Newer robosuite releases expect a composite-controller config.
     """
+    from robosuite.controllers.composite.composite_controller_factory import (
+        refactor_composite_controller_config,
+    )
+
     env_meta = copy.deepcopy(env_meta)
     env_kwargs = env_meta["env_kwargs"]
     controller_config = env_kwargs.get("controller_configs")
@@ -261,6 +399,8 @@ def upgrade_controller_config(env_meta: dict) -> dict:
 
 
 def create_env(env_meta: dict, camera_height: int, camera_width: int):
+    import robomimic.utils.env_utils as EnvUtils
+
     initialize_obs_utils()
     env_meta = upgrade_controller_config(env_meta)
     return EnvUtils.create_env_for_data_processing(
@@ -288,7 +428,15 @@ def render_views(
     for spec in specs:
         out_path = output_dir / f"{spec['name']}.mp4"
         writers[spec["name"]] = imageio.get_writer(out_path, fps=fps)
-        outputs.append({"name": spec["name"], "video": out_path.name})
+        outputs.append(
+            {
+                "name": spec["name"],
+                "obs_key": spec["obs_key"],
+                "video": out_path.name,
+                "camera_pos": np.asarray(spec["pos"], dtype=np.float64).tolist(),
+                "camera_quat_wxyz": np.asarray(spec["quat_wxyz"], dtype=np.float64).tolist(),
+            }
+        )
 
     env.reset()
     total = states.shape[0] if max_frames <= 0 else min(states.shape[0], max_frames)
@@ -305,16 +453,92 @@ def render_views(
     return outputs
 
 
-def build_html(output_dir: Path, demos: list[dict[str, object]]) -> None:
+def pose_records(specs: list[dict[str, object]]) -> list[dict[str, object]]:
+    records = []
+    for spec in specs:
+        record = {
+            "name": spec["name"],
+            "obs_key": spec["obs_key"],
+            "camera_pos": np.asarray(spec["pos"], dtype=np.float64).round(8).tolist(),
+            "camera_quat_wxyz": np.asarray(spec["quat_wxyz"], dtype=np.float64).round(8).tolist(),
+            "target": np.asarray(spec["target"], dtype=np.float64).round(8).tolist(),
+        }
+        for key in ("lateral_offset", "forward_offset", "height_offset", "target_z_offset", "severity"):
+            if key in spec:
+                record[key] = round(float(spec[key]), 8)
+        records.append(record)
+    return records
+
+
+def write_pose_exports(output_dir: Path, specs: list[dict[str, object]]) -> None:
+    records = pose_records(specs)
+    with (output_dir / "camera_views.json").open("w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2)
+
+    fieldnames = [
+        "name",
+        "obs_key",
+        "camera_pos",
+        "camera_quat_wxyz",
+        "target",
+        "lateral_offset",
+        "forward_offset",
+        "height_offset",
+        "target_z_offset",
+        "severity",
+    ]
+    with (output_dir / "camera_views.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for record in records:
+            row = dict(record)
+            for key in ("camera_pos", "camera_quat_wxyz", "target"):
+                row[key] = json.dumps(row[key])
+            writer.writerow(row)
+
+
+def _format_float_list(values: list[float]) -> str:
+    return "[" + ", ".join(f"{value:.8f}" for value in values) + "]"
+
+
+def build_html(
+    output_dir: Path,
+    demos: list[dict[str, object]],
+    specs: list[dict[str, object]],
+    view_mode: str,
+) -> None:
+    records_by_name = {record["name"]: record for record in pose_records(specs)}
     sections = []
     for demo in demos:
         cards = []
         for item in demo["videos"]:
+            record = records_by_name[item["name"]]
+            offsets = []
+            for label, key in (
+                ("lat", "lateral_offset"),
+                ("fwd", "forward_offset"),
+                ("z", "height_offset"),
+                ("aim", "target_z_offset"),
+            ):
+                if key in record:
+                    offsets.append(f"{label} {float(record[key]):+.2f}")
+            offset_text = " | ".join(offsets) if offsets else "baseline"
             cards.append(
                 f"""
             <article class="card">
-              <h3>{html.escape(item['name'])}</h3>
+              <div class="card-header">
+                <h3>{html.escape(item['name'])}</h3>
+                <span>{html.escape(item['obs_key'])}</span>
+              </div>
               <video controls preload="metadata" src="{html.escape(item['video'])}"></video>
+              <dl>
+                <dt>offsets</dt>
+                <dd>{html.escape(offset_text)}</dd>
+                <dt>pos</dt>
+                <dd><code>{html.escape(_format_float_list(record['camera_pos']))}</code></dd>
+                <dt>quat</dt>
+                <dd><code>{html.escape(_format_float_list(record['camera_quat_wxyz']))}</code></dd>
+              </dl>
             </article>
             """
             )
@@ -332,6 +556,8 @@ def build_html(output_dir: Path, demos: list[dict[str, object]]) -> None:
         """
         )
 
+    non_agent_views = max(len(specs) - 1, 0)
+    demo_count = len(demos)
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -342,18 +568,16 @@ def build_html(output_dir: Path, demos: list[dict[str, object]]) -> None:
     body {{
       margin: 0;
       padding: 24px;
-      background: #efe9dd;
-      color: #1f1b17;
-      font-family: "Iowan Old Style", "Palatino Linotype", serif;
+      background: #f6f7f4;
+      color: #161817;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }}
     h1 {{ margin: 0 0 8px; }}
-    p {{ margin: 0 0 18px; color: #6f6a63; }}
+    p {{ margin: 0 0 18px; color: #5d635f; max-width: 1080px; }}
+    a {{ color: #1769aa; }}
     .demo {{
-      margin: 0 0 28px;
-      padding: 16px;
-      border: 1px solid #d9d0c0;
-      border-radius: 20px;
-      background: rgba(255, 250, 240, 0.55);
+      margin: 0 0 32px;
+      padding: 0;
     }}
     .demo-header {{
       display: flex;
@@ -373,34 +597,57 @@ def build_html(output_dir: Path, demos: list[dict[str, object]]) -> None:
     }}
     .grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 14px;
     }}
     .card {{
-      background: #fffaf0;
-      border: 1px solid #d9d0c0;
-      border-radius: 16px;
-      box-shadow: 0 12px 30px rgba(34, 26, 18, 0.08);
+      background: #ffffff;
+      border: 1px solid #d8ded8;
+      border-radius: 8px;
       padding: 12px;
     }}
-    h3 {{ margin: 0 0 10px; font-size: 18px; }}
+    .card-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 0 10px;
+    }}
+    .card-header span {{
+      color: #66706a;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }}
+    h3 {{ margin: 0; font-size: 15px; overflow-wrap: anywhere; }}
     video {{
       width: 100%;
       display: block;
       aspect-ratio: 1 / 1;
       background: #050403;
     }}
+    dl {{
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 4px 8px;
+      margin: 10px 0 0;
+      font-size: 12px;
+    }}
+    dt {{ color: #66706a; }}
+    dd {{ margin: 0; min-width: 0; overflow-wrap: anywhere; }}
+    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
   </style>
 </head>
 <body>
   <h1>Square PH Camera View Preview</h1>
-  <p>Ten demos total: five labeled full observability and five labeled partial observability. Each demo shows agentview plus eight candidate third-person views: four moderate variants and four more aggressive variants chosen to increase occlusion.</p>
-  <p>How these views were generated: I used the original robosuite <code>agentview</code> as the reference camera, extracted its position and orientation, then created new candidate views by manually perturbing the camera pose in a front-facing regime. The moderate views use smaller left/right, forward, and height offsets; the close views use larger lateral shifts, move slightly closer to the workspace, and lower the camera more to induce stronger occlusion between the gripper, peg, and hole. All candidate cameras were then re-aimed toward the same task workspace before replaying the same trajectories.</p>
+  <p>{demo_count} demo(s), view mode <code>{html.escape(view_mode)}</code>. Each demo shows <code>agentview</code> plus {non_agent_views} third-person candidate views. Pose exports are available as <a href="camera_views.json">camera_views.json</a> and <a href="camera_views.csv">camera_views.csv</a>.</p>
+  <p>Systematic views use the original robosuite <code>agentview</code> as the reference, then sweep lateral left/right offset, forward distance, camera height, and target height. Every candidate is re-aimed at the Square workspace and exported with MuJoCo <code>quat_wxyz</code>.</p>
   {''.join(sections)}
 </body>
 </html>
 """
-    (output_dir / "index.html").write_text(html_doc)
+    (output_dir / "index.html").write_text(html_doc, encoding="utf-8")
 
 
 def main() -> None:
@@ -417,7 +664,13 @@ def main() -> None:
     env.reset()
     env.reset_to({"states": initial_state["states"]})
     base_pos, base_rot = current_agentview_pose(env, "agentview")
-    specs = view_specs(base_pos, base_rot)
+    specs = view_specs(
+        base_pos=base_pos,
+        base_rot=base_rot,
+        mode=args.view_mode,
+        num_candidate_views=args.num_candidate_views,
+    )
+    write_pose_exports(args.output_dir, specs)
 
     demo_sections = []
     for row in selected:
@@ -442,8 +695,10 @@ def main() -> None:
             }
         )
 
-    build_html(args.output_dir, demo_sections)
+    build_html(args.output_dir, demo_sections, specs, args.view_mode)
     print(args.output_dir / "index.html")
+    print(args.output_dir / "camera_views.json")
+    print(args.output_dir / "camera_views.csv")
 
 
 if __name__ == "__main__":
