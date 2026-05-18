@@ -27,6 +27,10 @@ if [[ -z "${ROLLOUT_IMAGE:-}" ]]; then
   echo "Set ROLLOUT_IMAGE=/path/to/200_successful_rollouts_image.hdf5" >&2
   exit 2
 fi
+if [[ ! -f "${ROLLOUT_IMAGE}" ]]; then
+  echo "ROLLOUT_IMAGE does not exist: ${ROLLOUT_IMAGE}" >&2
+  exit 2
+fi
 
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-openx}"

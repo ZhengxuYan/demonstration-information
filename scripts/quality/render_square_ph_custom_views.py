@@ -11,7 +11,8 @@ conda activate openx
 
 python scripts/quality/render_square_ph_custom_views.py \
   --dataset /iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5 \
-  --annotations-csv /iris/u/jasonyan/data/square_ph_observability_annotations.csv \
+  --annotations-csv /iris/u/jasonyan/repos/demonstration-information/observability_annotations.csv \
+  --annotation-dataset square_ph \
   --demos-per-label 5 \
   --output-dir /iris/u/jasonyan/data/camera_view_previews/square_ph_many_views \
   --num-candidate-views 50
@@ -42,6 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--demo-idx", type=int, default=0)
     parser.add_argument("--annotations-csv", type=Path)
+    parser.add_argument(
+        "--annotation-dataset",
+        type=str,
+        default=None,
+        help="Optional dataset value to keep from --annotations-csv, e.g. square_ph.",
+    )
     parser.add_argument("--demos-per-label", type=int, default=5)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--camera-height", type=int, default=256)
@@ -300,11 +307,17 @@ def load_demo(path: Path, demo_idx: int) -> tuple[dict, np.ndarray]:
     return env_meta, initial_state, states
 
 
-def select_demo_indices(annotations_csv: Path, demos_per_label: int) -> list[dict[str, object]]:
+def select_demo_indices(
+    annotations_csv: Path,
+    demos_per_label: int,
+    annotation_dataset: str | None = None,
+) -> list[dict[str, object]]:
     rows = []
     with annotations_csv.open(newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            if annotation_dataset is not None and row.get("dataset", "").strip() != annotation_dataset:
+                continue
             label = row["label"].strip()
             if label not in {"full", "partial"}:
                 continue
@@ -315,6 +328,9 @@ def select_demo_indices(annotations_csv: Path, demos_per_label: int) -> list[dic
                     "note": row.get("note", "").strip(),
                 }
             )
+    if not rows:
+        suffix = f" for dataset={annotation_dataset}" if annotation_dataset is not None else ""
+        raise ValueError(f"No full/partial annotation rows found in {annotations_csv}{suffix}")
 
     selected = []
     for label in ("full", "partial"):
@@ -655,7 +671,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.annotations_csv is not None:
-        selected = select_demo_indices(args.annotations_csv, args.demos_per_label)
+        selected = select_demo_indices(args.annotations_csv, args.demos_per_label, args.annotation_dataset)
     else:
         selected = [{"ep_idx": args.demo_idx, "label": "unspecified", "note": ""}]
 
