@@ -25,6 +25,8 @@ import copy
 import csv
 import html
 import json
+import sys
+import types
 from pathlib import Path
 
 import h5py
@@ -75,6 +77,18 @@ def initialize_obs_utils() -> None:
 
     dummy_spec = dict(obs=dict(low_dim=["robot0_eef_pos"], rgb=[]))
     ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
+
+
+def install_lang_utils_stub() -> None:
+    """Avoid loading CLIP / transformers when robomimic only needs env reset/render."""
+    module_name = "robomimic.utils.lang_utils"
+    if module_name in sys.modules:
+        return
+    stub = types.ModuleType(module_name)
+    stub.LANG_EMB_OBS_KEY = "lang_emb"
+    stub.get_lang_emb = lambda lang: None
+    stub.get_lang_emb_shape = lambda: []
+    sys.modules[module_name] = stub
 
 
 def normalize(vec: np.ndarray) -> np.ndarray:
@@ -418,6 +432,8 @@ def upgrade_controller_config(env_meta: dict) -> dict:
 
 
 def create_env(env_meta: dict, camera_height: int, camera_width: int):
+    install_lang_utils_stub()
+
     import robomimic.utils.env_utils as EnvUtils
 
     initialize_obs_utils()
