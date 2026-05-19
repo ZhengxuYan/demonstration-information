@@ -7,7 +7,7 @@
 #SBATCH --mem=64GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=ph_cam_views
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris9,iris-hgx-1,iris-hgx-2,iris-hp-z8
 #SBATCH --output=/iris/u/jasonyan/slurm/%j_ph_cam_views.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%j_ph_cam_views.err
 

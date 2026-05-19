@@ -458,11 +458,11 @@ def render_views(
     max_frames: int,
 ) -> list[dict[str, object]]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    writers = {}
     outputs = []
+    total = states.shape[0] if max_frames <= 0 else min(states.shape[0], max_frames)
+    env.reset()
     for spec in specs:
         out_path = output_dir / f"{spec['name']}.mp4"
-        writers[spec["name"]] = imageio.get_writer(out_path, fps=fps)
         outputs.append(
             {
                 "name": spec["name"],
@@ -472,19 +472,13 @@ def render_views(
                 "camera_quat_wxyz": np.asarray(spec["quat_wxyz"], dtype=np.float64).tolist(),
             }
         )
-
-    env.reset()
-    total = states.shape[0] if max_frames <= 0 else min(states.shape[0], max_frames)
-    try:
-        for i in range(total):
-            env.reset_to({"states": states[i]})
-            for spec in specs:
+        print(f"rendering {output_dir.name}/{spec['name']} ({total} frames)", flush=True)
+        with imageio.get_writer(out_path, fps=fps) as writer:
+            for i in range(total):
+                env.reset_to({"states": states[i]})
                 set_camera_pose(env, "agentview", spec["pos"], spec["rot"])
                 frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
-                writers[spec["name"]].append_data(frame)
-    finally:
-        for writer in writers.values():
-            writer.close()
+                writer.append_data(frame)
     return outputs
 
 
@@ -712,6 +706,7 @@ def main() -> None:
         demo_idx = row["ep_idx"]
         _, _, states = load_demo(args.dataset, demo_idx)
         demo_dir = args.output_dir / f"demo_{demo_idx}"
+        print(f"rendering demo {demo_idx} into {demo_dir}", flush=True)
         videos = render_views(
             env=env,
             states=states,
