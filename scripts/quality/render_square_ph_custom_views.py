@@ -449,7 +449,6 @@ def create_env(env_meta: dict, camera_height: int, camera_width: int):
 
 def render_views(
     env,
-    initial_state: dict,
     states: np.ndarray,
     specs: list[dict[str, object]],
     output_dir: Path,
@@ -461,7 +460,6 @@ def render_views(
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
     total = states.shape[0] if max_frames <= 0 else min(states.shape[0], max_frames)
-    env.reset_to(initial_state)
     for spec in specs:
         out_path = output_dir / f"{spec['name']}.mp4"
         outputs.append(
@@ -474,10 +472,10 @@ def render_views(
             }
         )
         print(f"rendering {output_dir.name}/{spec['name']} ({total} frames)", flush=True)
-        env.reset_to(initial_state)
         with imageio.get_writer(out_path, fps=fps) as writer:
             for i in range(total):
-                env.reset_to({"states": states[i]})
+                env.env.sim.set_state_from_flattened(states[i])
+                env.env.sim.forward()
                 set_camera_pose(env, "agentview", spec["pos"], spec["rot"])
                 frame = env.render(mode="rgb_array", height=height, width=width, camera_name="agentview")
                 writer.append_data(frame)
@@ -706,12 +704,11 @@ def main() -> None:
     demo_sections = []
     for row in selected:
         demo_idx = row["ep_idx"]
-        _, demo_initial_state, states = load_demo(args.dataset, demo_idx)
+        _, _, states = load_demo(args.dataset, demo_idx)
         demo_dir = args.output_dir / f"demo_{demo_idx}"
         print(f"rendering demo {demo_idx} into {demo_dir}", flush=True)
         videos = render_views(
             env=env,
-            initial_state=demo_initial_state,
             states=states,
             specs=specs,
             output_dir=demo_dir,
