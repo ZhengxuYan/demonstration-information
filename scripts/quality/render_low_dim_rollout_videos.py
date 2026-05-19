@@ -87,6 +87,50 @@ def upgrade_controller_config(env_meta: dict) -> dict:
     return env_meta
 
 
+def normalize_controller_config(env_meta: dict) -> dict:
+    """Merge dataset controller config with this robosuite install's defaults."""
+    try:
+        from robosuite.controllers import load_controller_config
+    except Exception:
+        return env_meta
+
+    env_meta = copy.deepcopy(env_meta)
+    env_kwargs = env_meta.get("env_kwargs", {})
+    controller_config = env_kwargs.get("controller_configs")
+    if not isinstance(controller_config, dict):
+        return env_meta
+
+    controller_type = controller_config.get("type")
+    if controller_type == "BASIC" and isinstance(controller_config.get("body_parts"), dict):
+        body_parts = controller_config["body_parts"]
+        for key in ("right", "arm0", "robot0_right"):
+            part_config = body_parts.get(key)
+            if isinstance(part_config, dict) and part_config.get("type"):
+                controller_config = part_config
+                controller_type = controller_config.get("type")
+                break
+        else:
+            for part_config in body_parts.values():
+                if isinstance(part_config, dict) and part_config.get("type") and "gripper" not in part_config.get("type", "").lower():
+                    controller_config = part_config
+                    controller_type = controller_config.get("type")
+                    break
+
+    if not controller_type:
+        return env_meta
+
+    try:
+        merged = load_controller_config(default_controller=controller_type)
+    except Exception:
+        merged = {}
+    if isinstance(merged, dict):
+        merged.update(controller_config)
+        # robosuite 1.2.0 controller_factory indexes this key directly.
+        merged.setdefault("interpolation", None)
+        env_kwargs["controller_configs"] = merged
+    return env_meta
+
+
 def create_env(env_meta: dict, camera_name: str, height: int, width: int):
     install_lang_utils_stub()
     initialize_obs_utils()
@@ -94,6 +138,13 @@ def create_env(env_meta: dict, camera_name: str, height: int, width: int):
     import robomimic.utils.env_utils as EnvUtils
 
     env_meta = upgrade_controller_config(env_meta)
+    env_meta = normalize_controller_config(env_meta)
+    # Some rollout files were produced with newer robosuite env kwargs. The
+    # robosuite 1.2.0 env used for replay does not accept these.
+    env_meta = copy.deepcopy(env_meta)
+    env_kwargs = env_meta.get("env_kwargs", {})
+    for key in ("lite_physics",):
+        env_kwargs.pop(key, None)
     return EnvUtils.create_env_for_data_processing(
         env_meta=env_meta,
         camera_names=[camera_name],
@@ -188,7 +239,11 @@ def render_file(path: Path, args: argparse.Namespace) -> list[dict[str, str]]:
 
 def main() -> None:
     args = parse_args()
-    files = sorted(list(args.input_root.rglob("*.hdf5")) + list(args.input_root.rglob("*.h5")))
+    if args.input_root.is_file():
+        files = [args.input_root]
+        args.input_root = args.input_root.parent
+    else:
+        files = sorted(list(args.input_root.rglob("*.hdf5")) + list(args.input_root.rglob("*.h5")))
     if not files:
         raise SystemExit(f"No .hdf5 or .h5 files found under {args.input_root}")
 
