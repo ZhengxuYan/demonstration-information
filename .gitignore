@@ -211,3 +211,4 @@ deploy/
 downloaded_results/
 observability_annotation_app/
 tmp_video_checks/
+camera_view_previews/

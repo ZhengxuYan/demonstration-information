@@ -152,7 +152,7 @@ def _finalize_view_specs(specs: list[dict[str, object]]) -> list[dict[str, objec
         seen_names.add(name)
         pos = np.asarray(spec["pos"], dtype=np.float64)
         target = np.asarray(spec["target"], dtype=np.float64)
-        rot = look_at_rotation(pos, target, world_up)
+        rot = np.asarray(spec["rot"], dtype=np.float64) if "rot" in spec else look_at_rotation(pos, target, world_up)
         quat_wxyz = corrected_rot_to_mujoco_quat(rot)
         finalized.append(
             {
@@ -272,7 +272,7 @@ def systematic_view_specs(base_pos: np.ndarray, base_rot: np.ndarray, num_candid
         selected = [candidates[int(idx)] for idx in idxs]
     selected.sort(key=lambda item: (item["lateral"], item["forward"], item["height"], item["target_z"]))
 
-    specs: list[dict[str, object]] = [dict(name="agentview", pos=base_pos, target=work_target)]
+    specs: list[dict[str, object]] = [dict(name="agentview", pos=base_pos, target=work_target, rot=base_rot)]
     for idx, item in enumerate(selected, start=1):
         lateral = item["lateral"]
         forward = item["forward"]
@@ -309,16 +309,18 @@ def view_specs(base_pos: np.ndarray, base_rot: np.ndarray, mode: str, num_candid
     raise ValueError(f"Unsupported view mode: {mode}")
 
 
-def load_demo(path: Path, demo_idx: int) -> tuple[dict, np.ndarray]:
+def load_demo(path: Path, demo_idx: int) -> tuple[dict, dict, np.ndarray, np.ndarray | None]:
     demo_key = f"demo_{demo_idx}"
     with h5py.File(path, "r") as f:
         env_meta = json.loads(f["data"].attrs["env_args"])
-        states = np.asarray(f[f"data/{demo_key}/states"])
-        initial_state = {"states": states[0], "model": f[f"data/{demo_key}"].attrs["model_file"]}
+        demo = f[f"data/{demo_key}"]
+        states = np.asarray(demo["states"])
+        initial_state = {"states": states[0], "model": demo.attrs["model_file"]}
         ep_meta = f[f"data/{demo_key}"].attrs.get("ep_meta", None)
         if ep_meta is not None:
             initial_state["ep_meta"] = ep_meta
-    return env_meta, initial_state, states
+        stored_agentview = np.asarray(demo["obs"]["agentview_image"]) if "obs" in demo and "agentview_image" in demo["obs"] else None
+    return env_meta, initial_state, states, stored_agentview
 
 
 def select_demo_indices(
@@ -450,6 +452,7 @@ def create_env(env_meta: dict, camera_height: int, camera_width: int):
 def render_views(
     env,
     states: np.ndarray,
+    stored_agentview: np.ndarray | None,
     specs: list[dict[str, object]],
     output_dir: Path,
     width: int,
@@ -473,6 +476,10 @@ def render_views(
         )
         print(f"rendering {output_dir.name}/{spec['name']} ({total} frames)", flush=True)
         with imageio.get_writer(out_path, fps=fps) as writer:
+            if spec["name"] == "agentview" and stored_agentview is not None:
+                for i in range(min(total, stored_agentview.shape[0])):
+                    writer.append_data(np.asarray(stored_agentview[i], dtype=np.uint8))
+                continue
             for i in range(total):
                 env.env.sim.set_state_from_flattened(states[i])
                 env.env.sim.forward()
@@ -688,7 +695,7 @@ def main() -> None:
     else:
         selected = [{"ep_idx": args.demo_idx, "label": "unspecified", "note": ""}]
 
-    env_meta, initial_state, states = load_demo(args.dataset, selected[0]["ep_idx"])
+    env_meta, initial_state, states, _ = load_demo(args.dataset, selected[0]["ep_idx"])
     env = create_env(env_meta, args.camera_height, args.camera_width)
     env.reset()
     env.reset_to({"states": initial_state["states"]})
@@ -704,12 +711,13 @@ def main() -> None:
     demo_sections = []
     for row in selected:
         demo_idx = row["ep_idx"]
-        _, _, states = load_demo(args.dataset, demo_idx)
+        _, _, states, stored_agentview = load_demo(args.dataset, demo_idx)
         demo_dir = args.output_dir / f"demo_{demo_idx}"
         print(f"rendering demo {demo_idx} into {demo_dir}", flush=True)
         videos = render_views(
             env=env,
             states=states,
+            stored_agentview=stored_agentview,
             specs=specs,
             output_dir=demo_dir,
             width=args.camera_width,
