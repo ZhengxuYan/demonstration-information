@@ -39,8 +39,17 @@ def sanitize_model_xml_for_mujoco_py(model_xml: str | bytes | None) -> str | Non
 
         rel_path = path_value.split(marker, 1)[1]
         asset_root = Path(robosuite.__file__).resolve().parent / "models" / "assets"
-        candidate = asset_root / rel_path
-        return str(candidate) if candidate.exists() else path_value
+        candidate_paths = [asset_root / rel_path]
+        if rel_path.startswith("bases/"):
+            candidate_paths.append(asset_root / rel_path.replace("bases/", "mounts/", 1))
+        if rel_path.startswith("mounts/"):
+            candidate_paths.append(asset_root / rel_path.replace("mounts/", "bases/", 1))
+        if rel_path.endswith("_vis.stl"):
+            candidate_paths.append(asset_root / rel_path.replace("_vis.stl", ".stl"))
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return str(candidate)
+        return str(candidate_paths[0])
 
     root = ET.fromstring(model_xml)
     unsupported_meshes = set()
