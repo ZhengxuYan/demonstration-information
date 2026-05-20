@@ -80,7 +80,7 @@ run_score() {
     --output="${output}"
 }
 
-for dataset_name in ph_agentview 400_agentview 400_mix; do
+for dataset_name in ph_agentview 400_agentview 400_left_close_low 400_mix; do
   if [[ "${MODE}" == "image" || "${MODE}" == "all" ]]; then
     run_score "${IMAGE_OBS_CKPT}" image_only "${dataset_name}"
   fi

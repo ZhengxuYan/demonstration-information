@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Prepare the three camera-view HDF5 datasets requested for DemInf.
+"""Prepare the camera-view HDF5 datasets requested for DemInf.
 
 Outputs:
   ph_agentview/image.hdf5
     200 PH episodes with agentview_image.
   400_agentview/image.hdf5
     200 PH episodes + 200 rollout episodes, all with agentview_image.
+  400_left_close_low/image.hdf5
+    200 PH episodes + 200 rollout episodes, all rendered from left_close_low
+    and stored under agentview_image.
   400_mix/image.hdf5
     Same 400 episodes, shuffled, with half rendered/stored as agentview_image
     from agentview and half rendered/stored as agentview_image from left_close_low.
@@ -17,6 +20,7 @@ store the selected third-person view under agentview_image.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -42,7 +46,13 @@ from prepare_policy_view_datasets import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ph-image", type=Path, required=True)
-    parser.add_argument("--rollout-image", type=Path, required=True)
+    parser.add_argument("--rollout-image", type=Path, action="append", required=True)
+    parser.add_argument(
+        "--rollout-annotations",
+        type=Path,
+        help="Optional CSV from serve_yes_no_video_annotation_app.py. Uses rows with --positive-label.",
+    )
+    parser.add_argument("--positive-label", default="yes")
     parser.add_argument("--out-root", type=Path, required=True)
     parser.add_argument("--num-ph", type=int, default=200)
     parser.add_argument("--num-rollouts", type=int, default=200)
@@ -59,6 +69,43 @@ def selected_indices(path: Path, count: int) -> list[int]:
     if count > n:
         raise ValueError(f"{path} only has {n} demos; requested {count}")
     return list(range(count))
+
+
+def all_indices(path: Path) -> list[int]:
+    with h5py.File(path, "r") as f:
+        return list(range(len(f["data"])))
+
+
+def rollout_selections(paths: list[Path], annotations: Path | None, positive_label: str, count: int) -> list[tuple[Path, int]]:
+    if annotations is None:
+        selected = []
+        for path in paths:
+            for idx in all_indices(path):
+                selected.append((path, idx))
+                if len(selected) >= count:
+                    return selected
+        raise ValueError(f"Only found {len(selected)} rollout demos across {paths}; requested {count}")
+
+    by_stem = {path.stem: path for path in paths}
+    selected: list[tuple[Path, int]] = []
+    with annotations.open(newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("label", "").strip().lower() != positive_label:
+                continue
+            source = row.get("source", "").strip()
+            demo_key = row.get("demo_key", "").strip()
+            if source not in by_stem:
+                continue
+            if not demo_key.startswith("demo_"):
+                continue
+            selected.append((by_stem[source], int(demo_key.removeprefix("demo_"))))
+            if len(selected) >= count:
+                break
+    if len(selected) < count:
+        raise ValueError(
+            f"Only found {len(selected)} rows with label={positive_label!r} in {annotations}; requested {count}"
+        )
+    return selected
 
 
 def render_left_close_low_as_agentview(env, states: np.ndarray, height: int, width: int, model_xml=None) -> np.ndarray:
@@ -83,7 +130,7 @@ def copy_episode(
     env,
     height: int,
     width: int,
-    use_left_close_low: bool,
+    view_mode: str,
 ) -> dict[str, object]:
     with h5py.File(src_path, "r") as src:
         src_keys = sorted_demo_keys(src["data"])
@@ -93,16 +140,17 @@ def copy_episode(
         states = demo_out["states"][:]
         model_xml = demo_out.attrs.get("model_file")
 
+    render_key = "left_close_low_image" if view_mode == "left_close_low_named" else "agentview_image"
     ensure_required_observations(
         demo_out,
         env,
         states,
-        "agentview_image",
+        render_key,
         height,
         width,
         model_xml=model_xml,
     )
-    if use_left_close_low:
+    if view_mode in {"left_close_low", "left_close_low_named"}:
         frames = render_left_close_low_as_agentview(env, states, height, width, model_xml=model_xml)
         upsert_image_pair(demo_out, "agentview_image", frames)
 
@@ -110,17 +158,16 @@ def copy_episode(
         "source_path": str(src_path),
         "source_demo_index": int(src_index),
         "source_demo_key": src_key,
-        "view": "left_close_low_as_agentview" if use_left_close_low else "agentview",
+        "view": view_mode,
     }
 
 
 def build_dataset(
     dst_path: Path,
     ph_path: Path,
-    rollout_path: Path | None,
+    rollout_items: list[tuple[Path, int]],
     ph_indices: list[int],
-    rollout_indices: list[int],
-    mix_views: bool,
+    view_mode: str,
     shuffle: bool,
     seed: int,
     height: int,
@@ -140,15 +187,14 @@ def build_dataset(
     env.reset()
 
     items = [("ph", ph_path, idx) for idx in ph_indices]
-    if rollout_path is not None:
-        items.extend(("rollout", rollout_path, idx) for idx in rollout_indices)
+    items.extend(("rollout", path, idx) for path, idx in rollout_items)
     if shuffle:
         rng = np.random.default_rng(seed)
         order = rng.permutation(len(items)).astype(int).tolist()
         items = [items[i] for i in order]
 
     left_indexes = set()
-    if mix_views:
+    if view_mode == "mix":
         rng = np.random.default_rng(seed + 17)
         left_indexes = set(rng.choice(np.arange(len(items)), size=len(items) // 2, replace=False).astype(int).tolist())
 
@@ -161,6 +207,9 @@ def build_dataset(
         for new_idx, (_, src_path, src_index) in enumerate(items):
             dst_key = f"demo_{new_idx}"
             new_keys.append(dst_key)
+            episode_view = view_mode
+            if view_mode == "mix":
+                episode_view = "left_close_low" if new_idx in left_indexes else "agentview"
             metadata[dst_key] = copy_episode(
                 src_path=src_path,
                 src_index=src_index,
@@ -169,7 +218,7 @@ def build_dataset(
                 env=env,
                 height=height,
                 width=width,
-                use_left_close_low=new_idx in left_indexes,
+                view_mode=episode_view,
             )
         write_masks(dst, new_keys)
         dst.attrs["dataset_build_metadata_json"] = json.dumps(metadata, indent=2, sort_keys=True)
@@ -181,18 +230,23 @@ def build_dataset(
 def main() -> None:
     args = parse_args()
     validate_source(args.ph_image, expected_action_dim=7)
-    validate_source(args.rollout_image, expected_action_dim=7)
+    for rollout_image in args.rollout_image:
+        validate_source(rollout_image, expected_action_dim=7)
 
     ph_indices = selected_indices(args.ph_image, args.num_ph)
-    rollout_indices = selected_indices(args.rollout_image, args.num_rollouts)
+    selected_rollouts = rollout_selections(
+        paths=args.rollout_image,
+        annotations=args.rollout_annotations,
+        positive_label=args.positive_label,
+        count=args.num_rollouts,
+    )
 
     build_dataset(
         args.out_root / "ph_agentview" / "image.hdf5",
         args.ph_image,
-        None,
-        ph_indices,
         [],
-        mix_views=False,
+        ph_indices,
+        view_mode="agentview",
         shuffle=False,
         seed=args.shuffle_seed,
         height=args.render_height,
@@ -202,10 +256,21 @@ def main() -> None:
     build_dataset(
         args.out_root / "400_agentview" / "image.hdf5",
         args.ph_image,
-        args.rollout_image,
+        selected_rollouts,
         ph_indices,
-        rollout_indices,
-        mix_views=False,
+        view_mode="agentview",
+        shuffle=False,
+        seed=args.shuffle_seed,
+        height=args.render_height,
+        width=args.render_width,
+        overwrite=args.overwrite,
+    )
+    build_dataset(
+        args.out_root / "400_left_close_low" / "image.hdf5",
+        args.ph_image,
+        selected_rollouts,
+        ph_indices,
+        view_mode="left_close_low",
         shuffle=False,
         seed=args.shuffle_seed,
         height=args.render_height,
@@ -215,10 +280,9 @@ def main() -> None:
     build_dataset(
         args.out_root / "400_mix" / "image.hdf5",
         args.ph_image,
-        args.rollout_image,
+        selected_rollouts,
         ph_indices,
-        rollout_indices,
-        mix_views=True,
+        view_mode="mix",
         shuffle=True,
         seed=args.shuffle_seed,
         height=args.render_height,

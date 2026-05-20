@@ -1,8 +1,8 @@
 #!/bin/bash
-# Prepare Tian's three camera-view datasets for DemInf and convert them to RLDS.
+# Prepare Tian's camera-view datasets for DemInf and convert them to RLDS.
 #
 # Required:
-#   ROLLOUT_IMAGE=/path/to/200_successful_rollouts_image.hdf5 sbatch ...
+#   ROLLOUT_IMAGES="/path/seed1.hdf5 /path/seed2.hdf5" ROLLOUT_ANNOTATIONS=/path/quality_annotations.csv sbatch ...
 #
 # Optional:
 #   PH_IMAGE=/path/to/square/ph/image.hdf5
@@ -23,17 +23,33 @@
 
 set -euo pipefail
 
-if [[ -z "${ROLLOUT_IMAGE:-}" ]]; then
-  echo "Set ROLLOUT_IMAGE=/path/to/200_successful_rollouts_image.hdf5" >&2
+if [[ -z "${ROLLOUT_IMAGES:-${ROLLOUT_IMAGE:-}}" ]]; then
+  echo "Set ROLLOUT_IMAGES='/path/seed1.hdf5 /path/seed2.hdf5' or ROLLOUT_IMAGE=/path/to/rollouts.hdf5" >&2
   exit 2
 fi
-if [[ ! -f "${ROLLOUT_IMAGE}" ]]; then
-  echo "ROLLOUT_IMAGE does not exist: ${ROLLOUT_IMAGE}" >&2
-  exit 2
+ROLLOUT_IMAGES="${ROLLOUT_IMAGES:-${ROLLOUT_IMAGE}}"
+read -r -a ROLLOUT_IMAGE_ARRAY <<< "${ROLLOUT_IMAGES}"
+ROLLOUT_ARGS=()
+for rollout_image in "${ROLLOUT_IMAGE_ARRAY[@]}"; do
+  if [[ ! -f "${rollout_image}" ]]; then
+    echo "ROLLOUT_IMAGE does not exist: ${rollout_image}" >&2
+    exit 2
+  fi
+  ROLLOUT_ARGS+=(--rollout-image "${rollout_image}")
+done
+ANNOTATION_ARGS=()
+if [[ -n "${ROLLOUT_ANNOTATIONS:-}" ]]; then
+  if [[ ! -f "${ROLLOUT_ANNOTATIONS}" ]]; then
+    echo "ROLLOUT_ANNOTATIONS does not exist: ${ROLLOUT_ANNOTATIONS}" >&2
+    exit 2
+  fi
+  ANNOTATION_ARGS+=(--rollout-annotations "${ROLLOUT_ANNOTATIONS}")
 fi
 
+set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-openx}"
+set -u
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 PH_IMAGE="${PH_IMAGE:-/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5}"
@@ -52,11 +68,13 @@ export MKL_NUM_THREADS=2
 
 python scripts/quality/prepare_deminf_camera_view_datasets.py \
   --ph-image "${PH_IMAGE}" \
-  --rollout-image "${ROLLOUT_IMAGE}" \
+  "${ROLLOUT_ARGS[@]}" \
   --out-root "${OUT_ROOT}" \
+  "${ANNOTATION_ARGS[@]}" \
+  --positive-label "${POSITIVE_LABEL:-yes}" \
   --overwrite
 
-for name in ph_agentview 400_agentview 400_mix; do
+for name in ph_agentview 400_agentview 400_left_close_low 400_mix; do
   dataset_dir="${OUT_ROOT}/${name}"
   data_dir="${RLDS_ROOT}/${name}"
   rm -rf "${data_dir}/robo_mimic"

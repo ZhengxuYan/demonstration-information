@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video-skip", type=int, default=1)
     parser.add_argument("--max-demos-per-file", type=int, default=0, help="0 means all demos.")
     parser.add_argument("--max-frames", type=int, default=0, help="0 means all frames.")
+    parser.add_argument("--show-sites", action="store_true", help="Keep MuJoCo site markers visible in rendered videos.")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -173,6 +174,7 @@ def render_demo(
     fps: int,
     video_skip: int,
     max_frames: int,
+    show_sites: bool,
     overwrite: bool,
 ) -> int:
     if out_path.exists() and not overwrite:
@@ -181,15 +183,19 @@ def render_demo(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     total = len(states) if max_frames <= 0 else min(len(states), max_frames)
     frame_indices = range(0, total, max(video_skip, 1))
+    site_rgba = np.array(env.env.sim.model.site_rgba, copy=True)
 
     with imageio.get_writer(out_path, fps=fps) as writer:
         count = 0
         for i in frame_indices:
             env.env.sim.set_state_from_flattened(states[i])
             env.env.sim.forward()
+            if not show_sites:
+                env.env.sim.model.site_rgba[:, 3] = 0.0
             frame = env.render(mode="rgb_array", height=height, width=width, camera_name=camera_name)
             writer.append_data(np.asarray(frame, dtype=np.uint8))
             count += 1
+    env.env.sim.model.site_rgba[:] = site_rgba
     return count
 
 
@@ -220,6 +226,7 @@ def render_file(path: Path, args: argparse.Namespace) -> list[dict[str, str]]:
                     fps=args.fps,
                     video_skip=args.video_skip,
                     max_frames=args.max_frames,
+                    show_sites=args.show_sites,
                     overwrite=args.overwrite,
                 )
                 rows.append(
