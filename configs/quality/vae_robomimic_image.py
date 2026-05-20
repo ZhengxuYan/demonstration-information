@@ -177,7 +177,7 @@ def get_config(config_str="square/mh,sa,1"):
 
     datasets = {}
     for name, ds_cfg in dataset_specs:
-        if not has_multiple_datasets:
+        if not has_multiple_datasets and dataset_path == DEFAULT_ROBOMIMIC_RLDS:
             ds_cfg["val_split"] = "val"
         datasets[name] = ds_cfg
 
