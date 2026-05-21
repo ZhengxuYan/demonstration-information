@@ -137,6 +137,11 @@ def infer_source(dataset: str, ep_idx: int, meta: dict[str, Any]) -> str:
         return "ph"
     if dataset in {"400_agentview", "400_left_close_low"}:
         return "ph" if ep_idx < 200 else "rollout"
+    if dataset == "400_mix" and meta:
+        # The mixed dataset is shuffled, so ep_idx does not encode source. When
+        # metadata does not identify a rollout source path, the episode is from
+        # the PH half of the constructed dataset.
+        return "ph"
     return "unknown"
 
 
