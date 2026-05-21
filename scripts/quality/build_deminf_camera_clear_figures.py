@@ -161,20 +161,39 @@ def plot_mix_breakdowns(rows: list[dict], out: Path, ylim: tuple[float, float]) 
     ax.grid(axis="y", alpha=0.25)
     savefig(out / "400_mix_view_source_box_clear.png")
 
-    fig, ax = plt.subplots(figsize=(7.4, 4.2))
-    bins = np.linspace(ylim[0], ylim[1], 36)
-    for view in ["agentview", "left_close_low"]:
-        vals = [r["score"] for r in mix if r["view"] == view]
-        mean, _, _ = stats(vals)
-        ax.hist(vals, bins=bins, alpha=0.48, color=COLORS[view], label=f"{view} n={len(vals)}, mean={mean:.3f}")
-        ax.axvline(mean, color=COLORS[view], linewidth=2)
-    ax.axvline(0, color="0.55", linestyle="--", linewidth=1)
-    ax.set_xlim(ylim)
-    ax.set_xlabel("DemInf trajectory score")
-    ax.set_ylabel("episodes")
-    ax.set_title("400_mix: score distribution by camera view")
-    ax.legend(frameon=False, fontsize=9)
-    ax.grid(axis="y", alpha=0.2)
+    fig, ax = plt.subplots(figsize=(6.5, 4.8))
+    views = ["agentview", "left_close_low"]
+    view_values = [[r["score"] for r in mix if r["view"] == view] for view in views]
+    parts = ax.violinplot(view_values, positions=[1, 2], widths=0.75, showmeans=False, showextrema=False, showmedians=False)
+    for body, view in zip(parts["bodies"], views):
+        body.set_facecolor(COLORS[view])
+        body.set_edgecolor(COLORS[view])
+        body.set_alpha(0.28)
+
+    bp = ax.boxplot(view_values, positions=[1, 2], widths=0.32, showfliers=False, patch_artist=True)
+    for patch, view in zip(bp["boxes"], views):
+        patch.set(facecolor="white", edgecolor=COLORS[view], linewidth=1.7)
+    for med in bp["medians"]:
+        med.set(color="black", linewidth=1.6)
+
+    rng = np.random.default_rng(7)
+    for i, (view, vals) in enumerate(zip(views, view_values), start=1):
+        vals_arr = np.asarray(vals, dtype=float)
+        mean, _, ci = stats(vals)
+        jitter = rng.normal(0, 0.045, size=len(vals_arr))
+        ax.scatter(np.full(len(vals_arr), i) + jitter, vals_arr, s=10, color=COLORS[view], alpha=0.28, linewidths=0)
+        ax.errorbar(i, mean, yerr=ci, fmt="D", color="black", capsize=5, markersize=5, zorder=4)
+        ax.text(i, ylim[1] - 0.06, f"n={len(vals)}\nmean={mean:.3f}", ha="center", va="top", fontsize=9.5)
+
+    mean_agent, _, _ = stats(view_values[0])
+    mean_left, _, _ = stats(view_values[1])
+    ax.text(1.5, ylim[0] + 0.08, f"left - agent = {mean_left - mean_agent:.3f}", ha="center", va="bottom", fontsize=10)
+    ax.axhline(0, color="0.55", linestyle="--", linewidth=1)
+    ax.set_xticks([1, 2], views)
+    ax.set_ylim(ylim)
+    ax.set_ylabel("DemInf trajectory score")
+    ax.set_title("400_mix: camera view score comparison")
+    ax.grid(axis="y", alpha=0.25)
     savefig(out / "400_mix_view_distribution_clear.png")
 
 
