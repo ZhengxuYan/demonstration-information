@@ -44,6 +44,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--horizon", type=int, default=400)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--left-close-low", action="store_true")
+    parser.add_argument(
+        "--left-close-low-as-agentview",
+        action="store_true",
+        help="Render left-close-low and store it in obs['agentview_image']; use for policies trained on left images saved under agentview_image.",
+    )
     parser.add_argument("--image-height", type=int, default=84)
     parser.add_argument("--image-width", type=int, default=84)
     parser.add_argument("--device", type=str, default=None, help="torch device override, e.g. cuda:0 or cpu")
@@ -87,12 +92,43 @@ def maybe_add_left_close_low(obs: dict, env, enabled: bool, height: int, width: 
     return obs
 
 
-def rollout(policy, env, horizon: int, add_left_close_low: bool, image_height: int, image_width: int) -> dict:
+def maybe_replace_agentview_with_left_close_low(obs: dict, env, enabled: bool, height: int, width: int) -> dict:
+    if not enabled:
+        return obs
+    obs = deepcopy(obs)
+    obs["agentview_image"] = render_left_close_low_image(env, height=height, width=width)
+    return obs
+
+
+def prepare_obs(
+    obs: dict,
+    env,
+    add_left_close_low: bool,
+    left_close_low_as_agentview: bool,
+    image_height: int,
+    image_width: int,
+) -> dict:
+    obs = maybe_add_left_close_low(obs, env, add_left_close_low, image_height, image_width)
+    obs = maybe_replace_agentview_with_left_close_low(
+        obs, env, left_close_low_as_agentview, image_height, image_width
+    )
+    return obs
+
+
+def rollout(
+    policy,
+    env,
+    horizon: int,
+    add_left_close_low: bool,
+    left_close_low_as_agentview: bool,
+    image_height: int,
+    image_width: int,
+) -> dict:
     policy.start_episode()
     obs = env.reset()
     state_dict = env.get_state()
     obs = env.reset_to(state_dict)
-    obs = maybe_add_left_close_low(obs, env, add_left_close_low, image_height, image_width)
+    obs = prepare_obs(obs, env, add_left_close_low, left_close_low_as_agentview, image_height, image_width)
 
     total_reward = 0.0
     success = False
@@ -101,7 +137,9 @@ def rollout(policy, env, horizon: int, add_left_close_low: bool, image_height: i
         for step_i in range(horizon):
             action = policy(ob=obs)
             next_obs, reward, done, _ = env.step(action)
-            next_obs = maybe_add_left_close_low(next_obs, env, add_left_close_low, image_height, image_width)
+            next_obs = prepare_obs(
+                next_obs, env, add_left_close_low, left_close_low_as_agentview, image_height, image_width
+            )
             total_reward += reward
             success = bool(env.is_success()["task"])
             if done or success:
@@ -147,6 +185,7 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
             env=env,
             horizon=args.horizon,
             add_left_close_low=args.left_close_low,
+            left_close_low_as_agentview=args.left_close_low_as_agentview,
             image_height=args.image_height,
             image_width=args.image_width,
         )
