@@ -227,16 +227,24 @@ def plot_mix_filtered_quality_curve(rows: list[dict], out: Path) -> None:
     avg_quality_top_k = np.cumsum(quality_sorted_by_score) / kept_counts
     episodes_filtered = n - kept_counts
 
-    oracle_quality = np.sort(labels_arr)[::-1]
-    oracle_avg_quality_top_k = np.cumsum(oracle_quality) / kept_counts
-
     fig, ax = plt.subplots(figsize=(7.0, 4.8))
-    ax.plot(episodes_filtered[::-1], avg_quality_top_k[::-1], color="#2F4B7C", linewidth=2.2, label="DemInf ranking")
-    ax.plot(episodes_filtered[::-1], oracle_avg_quality_top_k[::-1], color="#777777", linewidth=2.0, linestyle="--", label="Oracle")
-    ax.axhline(labels_arr.mean(), color="#E45756", linewidth=1.6, linestyle=":", label=f"Random / no filter ({labels_arr.mean():.2f})")
+    ax.plot(
+        episodes_filtered[::-1],
+        avg_quality_top_k[::-1],
+        color="#2F4B7C",
+        linewidth=2.4,
+        label="Filtered by DemInf score",
+    )
+    ax.axhline(
+        labels_arr.mean(),
+        color="#E45756",
+        linewidth=1.8,
+        linestyle="--",
+        label=f"No filtering baseline ({labels_arr.mean():.2f})",
+    )
     ax.set_xlabel("Number of episodes filtered")
-    ax.set_ylabel("Average observability label of remaining episodes")
-    ax.set_title("400_mix: filtering curve (agentview=2, left_close_low=1)")
+    ax.set_ylabel("Average quality score of remaining episodes")
+    ax.set_title("400_mix: filtered average quality score")
     ax.set_xlim(0, n - 1)
     ax.set_ylim(0.95, 2.05)
     ax.grid(alpha=0.25)
