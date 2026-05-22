@@ -197,6 +197,62 @@ def plot_mix_breakdowns(rows: list[dict], out: Path, ylim: tuple[float, float]) 
     savefig(out / "400_mix_view_distribution_clear.png")
 
 
+def plot_mix_filtered_quality_curve(rows: list[dict], out: Path) -> None:
+    mix = [r for r in rows if r["dataset"] == "400_mix"]
+    if not mix:
+        return
+
+    labels = []
+    scores = []
+    for row in mix:
+        if row["view"] == "agentview":
+            labels.append(2.0)
+        elif row["view"] == "left_close_low":
+            labels.append(1.0)
+        else:
+            continue
+        scores.append(float(row["score"]))
+
+    labels_arr = np.asarray(labels, dtype=float)
+    scores_arr = np.asarray(scores, dtype=float)
+    n = len(labels_arr)
+    if n == 0:
+        return
+
+    # Remove low DemInf-score episodes first. At x=0, all episodes are kept; at
+    # x=n-1, only the single highest-scored episode remains.
+    sorted_by_score = np.argsort(scores_arr)[::-1]
+    quality_sorted_by_score = labels_arr[sorted_by_score]
+    kept_counts = np.arange(1, n + 1)
+    avg_quality_top_k = np.cumsum(quality_sorted_by_score) / kept_counts
+    episodes_filtered = n - kept_counts
+
+    oracle_quality = np.sort(labels_arr)[::-1]
+    oracle_avg_quality_top_k = np.cumsum(oracle_quality) / kept_counts
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.8))
+    ax.plot(episodes_filtered[::-1], avg_quality_top_k[::-1], color="#2F4B7C", linewidth=2.2, label="DemInf ranking")
+    ax.plot(episodes_filtered[::-1], oracle_avg_quality_top_k[::-1], color="#777777", linewidth=2.0, linestyle="--", label="Oracle")
+    ax.axhline(labels_arr.mean(), color="#E45756", linewidth=1.6, linestyle=":", label=f"Random / no filter ({labels_arr.mean():.2f})")
+    ax.set_xlabel("Number of episodes filtered")
+    ax.set_ylabel("Average observability label of remaining episodes")
+    ax.set_title("400_mix: filtering curve (agentview=2, left_close_low=1)")
+    ax.set_xlim(0, n - 1)
+    ax.set_ylim(0.95, 2.05)
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False)
+    ax.text(
+        0.02,
+        0.05,
+        f"n={n}; full={int(np.sum(labels_arr == 2.0))}; partial={int(np.sum(labels_arr == 1.0))}",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=9,
+    )
+    savefig(out / "400_mix_filtered_avg_observability_curve.png")
+
+
 def main() -> None:
     args = parse_args()
     rows = load_rows(args.episode_csv)
@@ -209,6 +265,7 @@ def main() -> None:
     plot_ph_rollout(rows, args.output_dir, ylim)
     plot_mean_ci(rows, args.output_dir)
     plot_mix_breakdowns(rows, args.output_dir, ylim)
+    plot_mix_filtered_quality_curve(rows, args.output_dir)
     print(f"wrote figures to {args.output_dir}")
 
 
