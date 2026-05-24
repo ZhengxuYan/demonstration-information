@@ -6,10 +6,11 @@
 #
 # Optional env:
 #   ALGO=gmm|discrete
-#   DATASETS="ph_agentview 400_agentview 400_left_close_low 400_mix"
+#   DATASETS="ph_agentview 400_agentview 400_left_close_low"
 #   DROP_PCTS="0 10 20 30 40"
 #   N_ROLLOUTS=50 HORIZON=400
-#   EPOCHS="2000"  # optional; default evaluates best_validation if present, else final checkpoint
+#   EPOCHS="600 800 1000 1200 1400 1600 1800 2000"
+#   EPOCH_START=600 EPOCH_END=2000 EPOCH_STEP=200
 #   MIX_EVAL_CAMERA=agentview|left_close_low
 
 #SBATCH --partition=iris-hi
@@ -34,12 +35,15 @@ REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 CKPT_ROOT="${CKPT_ROOT:-/iris/u/jasonyan/data/robomimic_outputs/deminf_mi_filtered_bc}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/robomimic_rollout_scores/deminf_mi_filtered_bc}"
 ALGO="${ALGO:-gmm}"
-DATASETS="${DATASETS:-ph_agentview 400_agentview 400_left_close_low 400_mix}"
+DATASETS="${DATASETS:-ph_agentview 400_agentview 400_left_close_low}"
 DROP_PCTS="${DROP_PCTS:-0 10 20 30 40}"
 N_ROLLOUTS="${N_ROLLOUTS:-50}"
 HORIZON="${HORIZON:-400}"
 SEED="${SEED:-0}"
 MIX_EVAL_CAMERA="${MIX_EVAL_CAMERA:-agentview}"
+EPOCH_START="${EPOCH_START:-600}"
+EPOCH_END="${EPOCH_END:-2000}"
+EPOCH_STEP="${EPOCH_STEP:-200}"
 
 if [[ "${ALGO}" != "gmm" && "${ALGO}" != "discrete" ]]; then
   echo "bad ALGO=${ALGO}; expected gmm or discrete" >&2
@@ -97,35 +101,31 @@ if [[ "${#ALL_CKPTS[@]}" -eq 0 ]]; then
 fi
 
 CKPTS=()
-if [[ -n "${EPOCHS:-}" ]]; then
-  for epoch in ${EPOCHS}; do
-    match=""
-    for ckpt in "${ALL_CKPTS[@]}"; do
-      if [[ "$(basename "${ckpt}")" == model_epoch_${epoch}* ]]; then
-        match="${ckpt}"
-        break
-      fi
-    done
-    if [[ -z "${match}" ]]; then
-      echo "missing epoch ${epoch} for ${RUN_NAME}" >&2
-      exit 1
-    fi
-    CKPTS+=("${match}")
+if [[ -z "${EPOCHS:-}" ]]; then
+  EPOCHS=""
+  epoch="${EPOCH_START}"
+  while (( epoch <= EPOCH_END )); do
+    EPOCHS="${EPOCHS} ${epoch}"
+    epoch=$((epoch + EPOCH_STEP))
   done
-else
-  BEST=""
-  for ckpt in "${ALL_CKPTS[@]}"; do
-    if [[ "$(basename "${ckpt}")" == *best_validation* ]]; then
-      BEST="${ckpt}"
-    fi
-  done
-  if [[ -n "${BEST}" ]]; then
-    CKPTS=("${BEST}")
-  else
-    LAST_INDEX=$((${#ALL_CKPTS[@]} - 1))
-    CKPTS=("${ALL_CKPTS[$LAST_INDEX]}")
-  fi
 fi
+
+for epoch in ${EPOCHS}; do
+  match=""
+  for ckpt in "${ALL_CKPTS[@]}"; do
+    if [[ "$(basename "${ckpt}")" == model_epoch_${epoch}* ]]; then
+      match="${ckpt}"
+      break
+    fi
+  done
+  if [[ -z "${match}" ]]; then
+    echo "missing epoch ${epoch} for ${RUN_NAME}" >&2
+    echo "available checkpoints:" >&2
+    printf '%s\n' "${ALL_CKPTS[@]}" >&2
+    exit 1
+  fi
+  CKPTS+=("${match}")
+done
 
 EXTRA_ARGS=()
 EVAL_CAMERA="agentview"
@@ -147,6 +147,7 @@ echo "run_name=${RUN_NAME}"
 echo "eval_camera=${EVAL_CAMERA}"
 echo "n_rollouts=${N_ROLLOUTS}"
 echo "horizon=${HORIZON}"
+echo "epochs=${EPOCHS}"
 printf 'checkpoints %s\n' "${#CKPTS[@]}"
 printf '%s\n' "${CKPTS[@]}"
 
