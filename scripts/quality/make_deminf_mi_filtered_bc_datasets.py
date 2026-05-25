@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
         help="Root containing <dataset>/image.hdf5.",
     )
     parser.add_argument(
+        "--source-hdf5",
+        action="append",
+        default=[],
+        help="Explicit source mapping in the form dataset=/path/to/image.hdf5. Overrides --source-root for that dataset.",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=Path("/iris/u/jasonyan/data/deminf_filtered_bc_datasets/mi_score"),
@@ -122,6 +128,16 @@ def read_scores(path: Path) -> dict[str, dict[int, dict[str, str]]]:
             row["score"] = str(score)
             by_dataset.setdefault(dataset, {})[ep_idx] = row
     return by_dataset
+
+
+def parse_source_hdf5(values: list[str]) -> dict[str, Path]:
+    out = {}
+    for value in values:
+        dataset, sep, path = value.partition("=")
+        if not sep or not dataset or not path:
+            raise ValueError(f"Invalid --source-hdf5 {value!r}; expected dataset=/path/to/image.hdf5")
+        out[dataset] = Path(path)
+    return out
 
 
 def selected_indices(scores: dict[int, dict[str, str]], num_demos: int, drop_fraction: float, drop_side: str) -> tuple[list[int], list[int]]:
@@ -230,6 +246,7 @@ def write_manifest_row(writer: csv.DictWriter, dataset: str, drop_fraction: floa
 def main() -> None:
     args = parse_args()
     by_dataset = read_scores(args.episode_csv)
+    source_hdf5 = parse_source_hdf5(args.source_hdf5)
     args.output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output_root / "manifest.csv"
 
@@ -240,7 +257,7 @@ def main() -> None:
         )
         writer.writeheader()
         for dataset in args.datasets:
-            src_path = args.source_root / dataset / "image.hdf5"
+            src_path = source_hdf5.get(dataset, args.source_root / dataset / "image.hdf5")
             if not src_path.exists():
                 raise FileNotFoundError(src_path)
             if dataset not in by_dataset:
