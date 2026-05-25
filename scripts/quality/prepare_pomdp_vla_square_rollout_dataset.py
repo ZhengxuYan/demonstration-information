@@ -119,6 +119,8 @@ def copy_one_demo(
         copy_group(src["data"][src_demo_key], demo_out)
 
     if not has_required_obs(demo_out):
+        if env is None:
+            raise RuntimeError(f"{src_path}:{src_demo_key} needs rendered obs but env was not initialized")
         if "states" not in demo_out:
             raise KeyError(f"{src_path}:{src_demo_key} needs rendered obs but has no states dataset")
         ensure_required_observations(
@@ -160,8 +162,11 @@ def main() -> None:
             with h5py.File(src_path, "r") as src:
                 env_meta = sanitize_env_meta(load_env_meta(src, src_path, None))
                 demo_keys = sorted_demo_keys(src["data"])
-            env = create_env(env_meta, args.render_height, args.render_width, ["agentview", "robot0_eye_in_hand"])
-            env.reset()
+                needs_env = any(not has_required_obs(src["data"][demo_key]) for demo_key in demo_keys)
+            env = None
+            if needs_env:
+                env = create_env(env_meta, args.render_height, args.render_width, ["agentview", "robot0_eye_in_hand"])
+                env.reset()
             for src_demo_key in tqdm(demo_keys, desc=src_path.name):
                 if remaining is not None and remaining <= 0:
                     break
