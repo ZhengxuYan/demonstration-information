@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -77,6 +78,15 @@ def action_len(demo: h5py.Group) -> int:
     return 0
 
 
+def sanitize_env_meta(env_meta: dict) -> dict:
+    """Drop newer robosuite kwargs that robosuite 1.2.0 cannot replay."""
+    env_meta = copy.deepcopy(env_meta)
+    env_kwargs = env_meta.get("env_kwargs", {})
+    for key in ("lite_physics",):
+        env_kwargs.pop(key, None)
+    return env_meta
+
+
 def copy_one_demo(
     src_path: Path,
     src_demo_key: str,
@@ -130,7 +140,7 @@ def main() -> None:
         new_idx = 0
         for src_path in inputs:
             with h5py.File(src_path, "r") as src:
-                env_meta = load_env_meta(src, src_path, None)
+                env_meta = sanitize_env_meta(load_env_meta(src, src_path, None))
                 demo_keys = sorted_demo_keys(src["data"])
             env = create_env(env_meta, args.render_height, args.render_width, ["agentview", "robot0_eye_in_hand"])
             env.reset()
