@@ -84,6 +84,24 @@ def sanitize_env_meta(env_meta: dict) -> dict:
     env_kwargs = env_meta.get("env_kwargs", {})
     for key in ("lite_physics",):
         env_kwargs.pop(key, None)
+    controller_config = env_kwargs.get("controller_configs")
+    if isinstance(controller_config, dict) and controller_config.get("type") == "BASIC":
+        body_parts = controller_config.get("body_parts", {})
+        if isinstance(body_parts, dict):
+            for part_key in ("right", "arm0", "robot0_right"):
+                part_config = body_parts.get(part_key)
+                if isinstance(part_config, dict) and part_config.get("type"):
+                    controller_config = dict(part_config)
+                    break
+            else:
+                for part_config in body_parts.values():
+                    if isinstance(part_config, dict) and part_config.get("type"):
+                        controller_config = dict(part_config)
+                        break
+        env_kwargs["controller_configs"] = controller_config
+    controller_config = env_kwargs.get("controller_configs")
+    if isinstance(controller_config, dict):
+        controller_config.setdefault("interpolation", None)
     return env_meta
 
 
