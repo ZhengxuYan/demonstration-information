@@ -23,9 +23,9 @@ conda activate "${CONDA_ENV:-robodiff}"
 set -u
 
 DP_REPO="${DP_REPO:-/iris/u/jasonyan/repos/diffusion_policy}"
-TASK_CONFIG="${TASK_CONFIG:-square_lowdim}"
-DATASET_PATH="${DATASET_PATH:-/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5}"
-OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_lowdim_10seed}"
+TASK_CONFIG="${TASK_CONFIG:-square_lowdim_abs}"
+DATASET_PATH="${DATASET_PATH:-/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/low_dim_abs.hdf5}"
+OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_lowdim_abs_10seed}"
 SEED="${SEED:-${SLURM_ARRAY_TASK_ID:-1}}"
 RUN_DIR="${OUT_ROOT}/seed_${SEED}"
 
