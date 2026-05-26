@@ -23,7 +23,8 @@ conda activate "${CONDA_ENV:-robodiff}"
 set -u
 
 DP_REPO="${DP_REPO:-/iris/u/jasonyan/repos/diffusion_policy}"
-DATASET_PATH="${DATASET_PATH:-${DP_REPO}/data/robomimic/datasets/square/ph/low_dim_abs.hdf5}"
+TASK_CONFIG="${TASK_CONFIG:-square_lowdim}"
+DATASET_PATH="${DATASET_PATH:-/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/square/ph/image.hdf5}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_lowdim_10seed}"
 SEED="${SEED:-${SLURM_ARRAY_TASK_ID:-1}}"
 RUN_DIR="${OUT_ROOT}/seed_${SEED}"
@@ -45,12 +46,13 @@ export MKL_NUM_THREADS=2
 
 echo "hostname=$(hostname)"
 echo "seed=${SEED}"
+echo "task_config=${TASK_CONFIG}"
 echo "dataset_path=${DATASET_PATH}"
 echo "run_dir=${RUN_DIR}"
 
 python train.py \
   --config-name=train_diffusion_unet_lowdim_workspace \
-  task=square_lowdim_abs \
+  task="${TASK_CONFIG}" \
   task.dataset_path="${DATASET_PATH}" \
   task.dataset.dataset_path="${DATASET_PATH}" \
   task.env_runner.dataset_path="${DATASET_PATH}" \
