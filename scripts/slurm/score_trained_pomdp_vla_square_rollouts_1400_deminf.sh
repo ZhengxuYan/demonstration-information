@@ -73,6 +73,7 @@ python scripts/quality/estimate_quality_combined_robomimic.py \
   --action_ckpt "${ACTION_CKPT}" \
   --square_dataset_name "${DATASET_NAME}" \
   --square_path_override "${RLDS}" \
+  --score_split "${SCORE_SPLIT:-train+val}" \
   --output "${OUTPUT}" \
   --batch_size "${BATCH_SIZE:-1024}"
 

@@ -62,6 +62,12 @@ flags.DEFINE_string(
     "Optional TFDS builder directory override for square_mh. Defaults to the checkpoint config path.",
     required=False,
 )
+flags.DEFINE_string(
+    "score_split",
+    None,
+    "TFDS split to score for the square dataset. Defaults to the checkpoint config train_split.",
+    required=False,
+)
 flags.DEFINE_multi_string(
     "extra_dataset",
     None,
@@ -109,7 +115,7 @@ def _build_dataset_configs(base_config: ConfigDict, extra_specs: list[ExtraDatas
         square_cfg["path"] = FLAGS.square_path_override
     if "val_split" in square_cfg:
         del square_cfg["val_split"]
-    square_cfg["train_split"] = square_cfg.get("train_split", "train")
+    square_cfg["train_split"] = FLAGS.score_split or square_cfg.get("train_split", "train")
 
     combined = {FLAGS.square_dataset_name: square_cfg}
     for spec in extra_specs:

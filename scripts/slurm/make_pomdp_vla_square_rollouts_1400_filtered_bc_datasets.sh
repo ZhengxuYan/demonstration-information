@@ -46,7 +46,7 @@ python scripts/quality/make_deminf_mi_filtered_bc_datasets.py \
   --datasets "${DATASET_NAME}" \
   --drop-fractions 0 0.25 0.5 0.75 \
   --drop-side low \
-  --score-universe scored \
+  --score-universe all \
   --valid-ratio "${VALID_RATIO:-0.1}" \
   --split-seed "${SPLIT_SEED:-1}" \
   --overwrite
