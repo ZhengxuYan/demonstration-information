@@ -24,8 +24,8 @@ set -u
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 DATASET_NAME="${DATASET_NAME:-pomdp_vla_square_rollouts_1400}"
 DATASET_HDF5="${DATASET_HDF5:-/iris/u/jasonyan/data/pomdp_vla_square_rollouts_1400/image.hdf5}"
-SCORE_CSV="${SCORE_CSV:-/iris/u/jasonyan/data/deminf_outputs/pomdp_vla_square_rollouts_1400_scores/image_proprio/episode_scores.csv}"
-OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/pomdp_vla_square_rollouts_1400_filtered/mi_score}"
+SCORE_CSV="${SCORE_CSV:-/iris/u/jasonyan/data/deminf_outputs/pomdp_vla_square_rollouts_1400_scores_trained/image_proprio/episode_scores.csv}"
+OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/pomdp_vla_square_rollouts_1400_filtered_bc_datasets/mi_score}"
 
 if [[ ! -f "${DATASET_HDF5}" ]]; then
   echo "missing DATASET_HDF5=${DATASET_HDF5}" >&2
@@ -46,6 +46,7 @@ python scripts/quality/make_deminf_mi_filtered_bc_datasets.py \
   --datasets "${DATASET_NAME}" \
   --drop-fractions 0 0.25 0.5 0.75 \
   --drop-side low \
+  --score-universe scored \
   --valid-ratio "${VALID_RATIO:-0.1}" \
   --split-seed "${SPLIT_SEED:-1}" \
   --overwrite

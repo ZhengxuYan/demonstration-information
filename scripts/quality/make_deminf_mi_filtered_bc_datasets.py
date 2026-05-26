@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         default="low",
         help="Which end of the score distribution to remove. Default removes the lowest MI scores.",
     )
+    parser.add_argument(
+        "--score-universe",
+        choices=["all", "scored"],
+        default="all",
+        help="Use all source episodes and require all scores, or filter only episodes present in the score CSV.",
+    )
     parser.add_argument("--valid-ratio", type=float, default=0.1)
     parser.add_argument("--split-seed", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
@@ -140,18 +146,30 @@ def parse_source_hdf5(values: list[str]) -> dict[str, Path]:
     return out
 
 
-def selected_indices(scores: dict[int, dict[str, str]], num_demos: int, drop_fraction: float, drop_side: str) -> tuple[list[int], list[int]]:
+def selected_indices(
+    scores: dict[int, dict[str, str]],
+    num_demos: int,
+    drop_fraction: float,
+    drop_side: str,
+    score_universe: str,
+) -> tuple[list[int], list[int]]:
     if not 0.0 <= drop_fraction < 1.0:
         raise ValueError(f"drop_fraction must be in [0, 1); got {drop_fraction}")
-    missing = sorted(set(range(num_demos)) - set(scores))
-    if missing:
-        raise ValueError(f"Missing scores for {len(missing)} episodes; first missing indices: {missing[:10]}")
+    if score_universe == "all":
+        candidates = list(range(num_demos))
+        missing = sorted(set(candidates) - set(scores))
+        if missing:
+            raise ValueError(f"Missing scores for {len(missing)} episodes; first missing indices: {missing[:10]}")
+    else:
+        candidates = sorted(idx for idx in scores if 0 <= idx < num_demos)
+        if not candidates:
+            raise ValueError("No scored episodes overlap the source dataset")
 
-    num_drop = int(round(drop_fraction * num_demos))
-    ordered = sorted(range(num_demos), key=lambda idx: float(scores[idx]["score"]))
+    num_drop = int(round(drop_fraction * len(candidates)))
+    ordered = sorted(candidates, key=lambda idx: float(scores[idx]["score"]))
     dropped = ordered[:num_drop] if drop_side == "low" else ordered[-num_drop:] if num_drop else []
     dropped_set = set(dropped)
-    kept = [idx for idx in range(num_demos) if idx not in dropped_set]
+    kept = [idx for idx in candidates if idx not in dropped_set]
     return kept, list(dropped)
 
 
@@ -266,7 +284,13 @@ def main() -> None:
                 num_demos = len(src["data"])
 
             for drop_fraction in args.drop_fractions:
-                keep, drop = selected_indices(by_dataset[dataset], num_demos, drop_fraction, args.drop_side)
+                keep, drop = selected_indices(
+                    by_dataset[dataset],
+                    num_demos,
+                    drop_fraction,
+                    args.drop_side,
+                    args.score_universe,
+                )
                 drop_percent = int(round(drop_fraction * 100))
                 dst_path = args.output_root / dataset / f"drop_{drop_percent:02d}" / "image.hdf5"
                 if drop_percent == 0 and args.symlink_zero_drop:
