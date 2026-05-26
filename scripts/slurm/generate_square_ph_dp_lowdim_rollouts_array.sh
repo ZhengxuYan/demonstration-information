@@ -24,8 +24,8 @@ set -u
 
 DEMO_REPO="${DEMO_REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 DP_REPO="${DP_REPO:-/iris/u/jasonyan/repos/diffusion_policy}"
-RUN_ROOT="${RUN_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_lowdim_10seed}"
-ROLLOUT_ROOT="${ROLLOUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_10seed}"
+RUN_ROOT="${RUN_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_lowdim_abs_10seed}"
+ROLLOUT_ROOT="${ROLLOUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_abs_10seed}"
 SEED="${SEED:-${SLURM_ARRAY_TASK_ID:-1}}"
 RUN_DIR="${RUN_ROOT}/seed_${SEED}"
 OUT_HDF5="${ROLLOUT_ROOT}/seed_${SEED}/rollouts.hdf5"

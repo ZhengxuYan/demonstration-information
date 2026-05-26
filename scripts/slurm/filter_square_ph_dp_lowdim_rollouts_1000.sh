@@ -21,8 +21,8 @@ conda activate "${CONDA_ENV:-robodiff}"
 set -u
 
 DEMO_REPO="${DEMO_REPO:-/iris/u/jasonyan/repos/demonstration-information}"
-ROLLOUT_ROOT="${ROLLOUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_10seed}"
-OUT_HDF5="${OUT_HDF5:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_10seed_filtered_1000/image.hdf5}"
+ROLLOUT_ROOT="${ROLLOUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_abs_10seed}"
+OUT_HDF5="${OUT_HDF5:-/iris/u/jasonyan/data/diffusion_policy_rollouts/square_ph_lowdim_abs_10seed_filtered_1000/image.hdf5}"
 
 mkdir -p /iris/u/jasonyan/slurm "$(dirname "${OUT_HDF5}")"
 cd "${DEMO_REPO}"
