@@ -28,6 +28,11 @@ OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/diffusion_policy_outputs/square_ph_l
 SEED="${SEED:-${SLURM_ARRAY_TASK_ID:-1}}"
 RUN_DIR="${OUT_ROOT}/seed_${SEED}"
 
+if [[ ! -f "${DATASET_PATH}" ]]; then
+  echo "missing DATASET_PATH=${DATASET_PATH}" >&2
+  exit 1
+fi
+
 mkdir -p /iris/u/jasonyan/slurm "${RUN_DIR}"
 cd "${DP_REPO}"
 
@@ -47,6 +52,8 @@ python train.py \
   --config-name=train_diffusion_unet_lowdim_workspace \
   task=square_lowdim_abs \
   task.dataset_path="${DATASET_PATH}" \
+  task.dataset.dataset_path="${DATASET_PATH}" \
+  task.env_runner.dataset_path="${DATASET_PATH}" \
   training.seed="${SEED}" \
   task.dataset.seed="${SEED}" \
   task.env_runner.n_test="${N_TEST:-50}" \
