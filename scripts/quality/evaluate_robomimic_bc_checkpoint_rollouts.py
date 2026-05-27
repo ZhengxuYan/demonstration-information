@@ -100,6 +100,26 @@ def maybe_replace_agentview_with_left_close_low(obs: dict, env, enabled: bool, h
     return obs
 
 
+def maybe_add_raw_robosuite_observations(obs: dict, env) -> dict:
+    """Add low-dim observations that wrappers may have filtered from reset/step."""
+    raw_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    if not hasattr(raw_env, "env") or not hasattr(raw_env.env, "_get_observations"):
+        return obs
+
+    try:
+        raw_di = raw_env.env._get_observations(force_update=True)
+    except TypeError:
+        raw_di = raw_env.env._get_observations()
+    raw_obs = raw_env.get_observation(raw_di) if hasattr(raw_env, "get_observation") else raw_di
+
+    if not raw_obs:
+        return obs
+    obs = deepcopy(obs)
+    for key, value in raw_obs.items():
+        obs.setdefault(key, value)
+    return obs
+
+
 def prepare_obs(
     obs: dict,
     env,
@@ -108,6 +128,7 @@ def prepare_obs(
     image_height: int,
     image_width: int,
 ) -> dict:
+    obs = maybe_add_raw_robosuite_observations(obs, env)
     obs = maybe_add_left_close_low(obs, env, add_left_close_low, image_height, image_width)
     obs = maybe_replace_agentview_with_left_close_low(
         obs, env, left_close_low_as_agentview, image_height, image_width
