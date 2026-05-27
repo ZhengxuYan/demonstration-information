@@ -11,6 +11,7 @@
 #   N_ROLLOUTS=50 HORIZON=400
 #   EPOCHS="600 800 1000 1200 1400 1600 1800 2000"
 #   EPOCH_START=600 EPOCH_END=2000 EPOCH_STEP=200
+#   SKIP_MISSING_EPOCHS=1
 #   MIX_EVAL_CAMERA=agentview|left_close_low
 
 #SBATCH --partition=iris-hi
@@ -44,6 +45,7 @@ MIX_EVAL_CAMERA="${MIX_EVAL_CAMERA:-agentview}"
 EPOCH_START="${EPOCH_START:-600}"
 EPOCH_END="${EPOCH_END:-2000}"
 EPOCH_STEP="${EPOCH_STEP:-200}"
+SKIP_MISSING_EPOCHS="${SKIP_MISSING_EPOCHS:-0}"
 
 if [[ "${ALGO}" != "gmm" && "${ALGO}" != "discrete" ]]; then
   echo "bad ALGO=${ALGO}; expected gmm or discrete" >&2
@@ -119,13 +121,23 @@ for epoch in ${EPOCHS}; do
     fi
   done
   if [[ -z "${match}" ]]; then
-    echo "missing epoch ${epoch} for ${RUN_NAME}" >&2
-    echo "available checkpoints:" >&2
-    printf '%s\n' "${ALL_CKPTS[@]}" >&2
-    exit 1
+    if [[ "${SKIP_MISSING_EPOCHS}" == "1" ]]; then
+      echo "skipping missing epoch ${epoch} for ${RUN_NAME}" >&2
+      continue
+    else
+      echo "missing epoch ${epoch} for ${RUN_NAME}" >&2
+      echo "available checkpoints:" >&2
+      printf '%s\n' "${ALL_CKPTS[@]}" >&2
+      exit 1
+    fi
   fi
   CKPTS+=("${match}")
 done
+
+if [[ "${#CKPTS[@]}" -eq 0 ]]; then
+  echo "no requested checkpoints are currently available for ${RUN_NAME}" >&2
+  exit 1
+fi
 
 EXTRA_ARGS=()
 EVAL_CAMERA="agentview"
