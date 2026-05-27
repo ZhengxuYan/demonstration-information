@@ -100,23 +100,108 @@ def maybe_replace_agentview_with_left_close_low(obs: dict, env, enabled: bool, h
     return obs
 
 
-def maybe_add_raw_robosuite_observations(obs: dict, env) -> dict:
-    """Add low-dim observations that wrappers may have filtered from reset/step."""
-    base_env = env.unwrapped if hasattr(env, "unwrapped") else env
-    if not hasattr(base_env, "get_observation"):
+def select_robot_value(value, arm: str):
+    if isinstance(value, dict):
+        return value[arm]
+    if isinstance(value, (list, tuple)):
+        return value[0]
+    return value
+
+
+def index_list(value, arm: str) -> list[int]:
+    value = select_robot_value(value, arm)
+    indexes = np.asarray(value)
+    if indexes.ndim >= 2:
+        indexes = indexes[0]
+    return indexes.reshape(-1).astype(np.int64).tolist()
+
+
+def first_existing_attr(obj, names: tuple[str, ...]):
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return None
+
+
+def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
+    if not hasattr(base_env, "env") or not hasattr(base_env.env, "robots"):
+        return obs
+    if not base_env.env.robots:
         return obs
 
     try:
-        raw_obs = base_env.get_observation()
+        import robosuite.utils.transform_utils as T
+    except Exception:
+        T = None
+
+    robot = base_env.env.robots[0]
+    arm = robot.arms[0] if getattr(robot, "arms", None) else "right"
+    sim = base_env.env.sim
+
+    joint_pos_indexes = first_existing_attr(robot, ("_ref_joint_pos_indexes", "_ref_joint_indexes"))
+    joint_vel_indexes = first_existing_attr(robot, ("_ref_joint_vel_indexes", "_ref_joint_indexes"))
+    if joint_pos_indexes is not None:
+        joint_pos = np.asarray([sim.data.qpos[i] for i in index_list(joint_pos_indexes, arm)], dtype=np.float32)
+        obs.setdefault("robot0_joint_pos", joint_pos)
+        obs.setdefault("robot0_joint_pos_cos", np.cos(joint_pos).astype(np.float32))
+        obs.setdefault("robot0_joint_pos_sin", np.sin(joint_pos).astype(np.float32))
+    if joint_vel_indexes is not None:
+        obs.setdefault(
+            "robot0_joint_vel",
+            np.asarray([sim.data.qvel[i] for i in index_list(joint_vel_indexes, arm)], dtype=np.float32),
+        )
+
+    gripper_pos_indexes = first_existing_attr(robot, ("_ref_gripper_joint_pos_indexes",))
+    gripper_vel_indexes = first_existing_attr(robot, ("_ref_gripper_joint_vel_indexes",))
+    if gripper_pos_indexes is not None:
+        obs.setdefault(
+            "robot0_gripper_qpos",
+            np.asarray([sim.data.qpos[i] for i in index_list(gripper_pos_indexes, arm)], dtype=np.float32),
+        )
+    if gripper_vel_indexes is not None:
+        obs.setdefault(
+            "robot0_gripper_qvel",
+            np.asarray([sim.data.qvel[i] for i in index_list(gripper_vel_indexes, arm)], dtype=np.float32),
+        )
+
+    eef_site_id = first_existing_attr(robot, ("eef_site_id",))
+    if eef_site_id is not None:
+        eef_site_id = select_robot_value(eef_site_id, arm)
+        obs.setdefault("robot0_eef_pos", np.asarray(sim.data.site_xpos[eef_site_id], dtype=np.float32))
+        obs.setdefault("robot0_eef_vel_lin", np.asarray(sim.data.site_xvelp[eef_site_id], dtype=np.float32))
+        obs.setdefault("robot0_eef_vel_ang", np.asarray(sim.data.site_xvelr[eef_site_id], dtype=np.float32))
+
+    eef_body_name = getattr(getattr(robot, "robot_model", None), "eef_name", None)
+    if eef_body_name is not None and T is not None:
+        eef_body_name = select_robot_value(eef_body_name, arm)
+        eef_quat = T.convert_quat(sim.data.get_body_xquat(eef_body_name), to="xyzw")
+        obs.setdefault("robot0_eef_quat", np.asarray(eef_quat, dtype=np.float32))
+    return obs
+
+
+def maybe_add_raw_robosuite_observations(obs: dict, env) -> dict:
+    """Add low-dim observations that wrappers may have filtered from reset/step."""
+    base_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    obs = deepcopy(obs)
+    try:
+        if hasattr(base_env, "get_observation"):
+            raw_obs = base_env.get_observation()
+        else:
+            raw_obs = {}
     except Exception as exc:
         print(f"WARNING: could not query raw robosuite observations: {exc}", file=sys.stderr)
-        return obs
+        raw_obs = {}
 
-    if not raw_obs:
-        return obs
-    obs = deepcopy(obs)
     for key, value in raw_obs.items():
         obs.setdefault(key, value)
+    if hasattr(base_env, "env") and hasattr(base_env.env, "_get_observations") and "object" not in obs:
+        try:
+            raw_di = base_env.env._get_observations(force_update=True)
+        except TypeError:
+            raw_di = base_env.env._get_observations()
+        if "object-state" in raw_di:
+            obs["object"] = np.asarray(raw_di["object-state"], dtype=np.float32)
+    obs = add_sim_lowdim_observations(obs, base_env)
     return obs
 
 
