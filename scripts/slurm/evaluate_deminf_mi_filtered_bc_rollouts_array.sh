@@ -30,7 +30,11 @@ set -euo pipefail
 
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 CONDA_ENV="${CONDA_ENV:-robodiff}"
+# Some conda deactivate hooks reference unset variables, which is fatal under
+# nounset when switching from an already-active environment inside sbatch.
+set +u
 conda activate "${CONDA_ENV}"
+set -u
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 CKPT_ROOT="${CKPT_ROOT:-/iris/u/jasonyan/data/robomimic_outputs/deminf_mi_filtered_bc}"
@@ -92,12 +96,13 @@ export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=2
 
 python - <<'PY'
+import os
 import robosuite
 from packaging.version import Version
 
 version = getattr(robosuite, "__version__", "unknown")
 print("robosuite", version)
-minimum = "${ROBOSUITE_MIN_VERSION:-}"
+minimum = os.environ.get("ROBOSUITE_MIN_VERSION", "")
 if minimum and Version(version) < Version(minimum):
     raise SystemExit(f"robosuite {version} < required {minimum}; set CONDA_ENV to a robosuite {minimum}+ env")
 PY
