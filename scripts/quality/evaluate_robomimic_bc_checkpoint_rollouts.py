@@ -213,9 +213,19 @@ def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
 
 
 def policy_required_obs_shapes(policy) -> dict:
+    def get_mapping_value(mapping, key: str):
+        if mapping is None:
+            return None
+        if hasattr(mapping, "get"):
+            return mapping.get(key)
+        try:
+            return mapping[key] if key in mapping else None
+        except Exception:
+            return None
+
     algo = getattr(policy, "policy", None)
     nets = getattr(algo, "nets", {})
-    policy_net = nets.get("policy") if hasattr(nets, "get") else None
+    policy_net = get_mapping_value(nets, "policy")
     input_group_shapes = getattr(policy_net, "input_obs_group_shapes", None)
     if input_group_shapes is not None and "obs" in input_group_shapes:
         return dict(input_group_shapes["obs"])
@@ -223,9 +233,9 @@ def policy_required_obs_shapes(policy) -> dict:
     if obs_shapes is not None:
         return dict(obs_shapes)
     policy_nets = getattr(policy_net, "nets", {})
-    group_encoder = policy_nets.get("encoder") if hasattr(policy_nets, "get") else None
+    group_encoder = get_mapping_value(policy_nets, "encoder")
     encoder_nets = getattr(group_encoder, "nets", {})
-    encoder = encoder_nets.get("obs") if hasattr(encoder_nets, "get") else None
+    encoder = get_mapping_value(encoder_nets, "obs")
     obs_shapes = getattr(encoder, "obs_shapes", None)
     return dict(obs_shapes) if obs_shapes is not None else {}
 
