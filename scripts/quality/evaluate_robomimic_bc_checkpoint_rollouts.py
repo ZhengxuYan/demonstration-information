@@ -18,6 +18,7 @@ import torch
 
 LEFT_CLOSE_LOW_POS = np.asarray([0.42205740, -0.23999999, 1.15230719], dtype=np.float64)
 LEFT_CLOSE_LOW_QUAT_WXYZ = np.asarray([0.81392215, 0.36066498, 0.18452251, 0.41641680], dtype=np.float64)
+MISSING_OBS_WARNED: set[str] = set()
 
 
 def install_lang_utils_stub() -> None:
@@ -171,10 +172,13 @@ def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
         obs.setdefault("robot0_joint_pos_cos", np.cos(joint_pos).astype(np.float32))
         obs.setdefault("robot0_joint_pos_sin", np.sin(joint_pos).astype(np.float32))
     if joint_vel_indexes is not None:
+        joint_vel_ids = index_list(joint_vel_indexes, arm)
         obs.setdefault(
             "robot0_joint_vel",
-            np.asarray([sim.data.qvel[i] for i in index_list(joint_vel_indexes, arm)], dtype=np.float32),
+            np.asarray([sim.data.qvel[i] for i in joint_vel_ids], dtype=np.float32),
         )
+        if hasattr(sim.data, "qacc"):
+            obs.setdefault("robot0_joint_acc", np.asarray([sim.data.qacc[i] for i in joint_vel_ids], dtype=np.float32))
 
     gripper_pos_indexes = first_existing_attr(robot, ("_ref_gripper_joint_pos_indexes",))
     gripper_vel_indexes = first_existing_attr(robot, ("_ref_gripper_joint_vel_indexes",))
@@ -196,12 +200,56 @@ def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
         obs.setdefault("robot0_eef_pos", np.asarray(sim.data.site_xpos[eef_site_id], dtype=np.float32))
         obs.setdefault("robot0_eef_vel_lin", eef_vel_lin)
         obs.setdefault("robot0_eef_vel_ang", eef_vel_ang)
+        if T is not None and hasattr(sim.data, "site_xmat"):
+            eef_site_mat = np.asarray(sim.data.site_xmat[eef_site_id], dtype=np.float64).reshape(3, 3)
+            obs.setdefault("robot0_eef_quat_site", np.asarray(T.mat2quat(eef_site_mat), dtype=np.float32))
 
     eef_body_name = getattr(getattr(robot, "robot_model", None), "eef_name", None)
     if eef_body_name is not None and T is not None:
         eef_body_name = select_robot_value(eef_body_name, arm)
         eef_quat = T.convert_quat(sim.data.get_body_xquat(eef_body_name), to="xyzw")
         obs.setdefault("robot0_eef_quat", np.asarray(eef_quat, dtype=np.float32))
+    return obs
+
+
+def policy_required_obs_shapes(policy) -> dict:
+    algo = getattr(policy, "policy", None)
+    nets = getattr(algo, "nets", {})
+    policy_net = nets.get("policy") if hasattr(nets, "get") else None
+    obs_shapes = getattr(policy_net, "obs_shapes", None)
+    if obs_shapes is not None:
+        return dict(obs_shapes)
+    encoder = getattr(getattr(policy_net, "nets", {}).get("encoder", None), "nets", {}).get("obs", None)
+    obs_shapes = getattr(encoder, "obs_shapes", None)
+    return dict(obs_shapes) if obs_shapes is not None else {}
+
+
+def update_policy_obs_filter(policy, required_obs_shapes: dict) -> None:
+    if not required_obs_shapes:
+        return
+    algo = getattr(policy, "policy", None)
+    config = getattr(algo, "global_config", None)
+    if config is not None and hasattr(config, "all_obs_keys"):
+        config.all_obs_keys = list(required_obs_shapes)
+
+
+def ensure_required_observations(obs: dict, required_obs_shapes: dict) -> dict:
+    if not required_obs_shapes:
+        return obs
+    obs = deepcopy(obs)
+    for key, shape in required_obs_shapes.items():
+        if key in obs:
+            continue
+        if key == "robot0_eef_quat_site" and "robot0_eef_quat" in obs:
+            obs[key] = np.asarray(obs["robot0_eef_quat"], dtype=np.float32)
+            continue
+        if key == "robot0_joint_acc" and "robot0_joint_vel" in obs:
+            obs[key] = np.zeros_like(np.asarray(obs["robot0_joint_vel"], dtype=np.float32))
+            continue
+        obs[key] = np.zeros(tuple(shape), dtype=np.float32)
+        if key not in MISSING_OBS_WARNED:
+            print(f"WARNING: filling missing observation {key} with zeros shape={tuple(shape)}", file=sys.stderr)
+            MISSING_OBS_WARNED.add(key)
     return obs
 
 
@@ -234,6 +282,7 @@ def maybe_add_raw_robosuite_observations(obs: dict, env) -> dict:
 def prepare_obs(
     obs: dict,
     env,
+    required_obs_shapes: dict,
     add_left_close_low: bool,
     left_close_low_as_agentview: bool,
     image_height: int,
@@ -244,6 +293,7 @@ def prepare_obs(
     obs = maybe_replace_agentview_with_left_close_low(
         obs, env, left_close_low_as_agentview, image_height, image_width
     )
+    obs = ensure_required_observations(obs, required_obs_shapes)
     return obs
 
 
@@ -271,6 +321,7 @@ def rollout(
     policy,
     env,
     horizon: int,
+    required_obs_shapes: dict,
     add_left_close_low: bool,
     left_close_low_as_agentview: bool,
     image_height: int,
@@ -280,7 +331,9 @@ def rollout(
     obs = env.reset()
     state_dict = env.get_state()
     obs = env.reset_to(state_dict)
-    obs = prepare_obs(obs, env, add_left_close_low, left_close_low_as_agentview, image_height, image_width)
+    obs = prepare_obs(
+        obs, env, required_obs_shapes, add_left_close_low, left_close_low_as_agentview, image_height, image_width
+    )
 
     total_reward = 0.0
     success = False
@@ -290,7 +343,13 @@ def rollout(
             action = policy(ob=obs)
             next_obs, reward, done, _ = env.step(action)
             next_obs = prepare_obs(
-                next_obs, env, add_left_close_low, left_close_low_as_agentview, image_height, image_width
+                next_obs,
+                env,
+                required_obs_shapes,
+                add_left_close_low,
+                left_close_low_as_agentview,
+                image_height,
+                image_width,
             )
             total_reward += reward
             success = bool(env.is_success()["task"])
@@ -320,6 +379,8 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
         device = TorchUtils.get_torch_device(try_to_use_cuda=True)
 
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=str(ckpt_path), device=device, verbose=False)
+    required_obs_shapes = policy_required_obs_shapes(policy)
+    update_policy_obs_filter(policy, required_obs_shapes)
     ckpt_dict = deepcopy(ckpt_dict)
     ckpt_dict["env_metadata"] = sanitize_env_metadata_for_local_robosuite(ckpt_dict["env_metadata"])
     env, _ = FileUtils.env_from_checkpoint(
@@ -338,6 +399,7 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
             policy=policy,
             env=env,
             horizon=args.horizon,
+            required_obs_shapes=required_obs_shapes,
             add_left_close_low=args.left_close_low,
             left_close_low_as_agentview=args.left_close_low_as_agentview,
             image_height=args.image_height,
