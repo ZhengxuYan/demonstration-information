@@ -246,7 +246,11 @@ def update_policy_obs_filter(policy, required_obs_shapes: dict) -> None:
     algo = getattr(policy, "policy", None)
     config = getattr(algo, "global_config", None)
     if config is not None and hasattr(config, "all_obs_keys"):
-        config.all_obs_keys = list(required_obs_shapes)
+        required_keys = list(required_obs_shapes)
+        if list(config.all_obs_keys) == required_keys:
+            return
+        with config.unlocked():
+            config.all_obs_keys = required_keys
 
 
 def ensure_required_observations(obs: dict, required_obs_shapes: dict) -> dict:
