@@ -223,6 +223,12 @@ def prepare_obs(
 
 def sanitize_env_metadata_for_local_robosuite(env_meta: dict) -> dict:
     """Make checkpoint env metadata replayable under the robosuite version here."""
+    import robosuite
+
+    version = tuple(int(part) for part in robosuite.__version__.split(".")[:2])
+    if version >= (1, 5):
+        return deepcopy(env_meta)
+
     from render_low_dim_rollout_videos import normalize_controller_config, upgrade_controller_config
 
     env_meta = upgrade_controller_config(deepcopy(env_meta))

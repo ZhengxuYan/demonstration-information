@@ -93,7 +93,13 @@ export MKL_NUM_THREADS=2
 
 python - <<'PY'
 import robosuite
-print("robosuite", getattr(robosuite, "__version__", "unknown"))
+from packaging.version import Version
+
+version = getattr(robosuite, "__version__", "unknown")
+print("robosuite", version)
+minimum = "${ROBOSUITE_MIN_VERSION:-}"
+if minimum and Version(version) < Version(minimum):
+    raise SystemExit(f"robosuite {version} < required {minimum}; set CONDA_ENV to a robosuite {minimum}+ env")
 PY
 
 mapfile -t ALL_CKPTS < <(find "${RUN_ROOT}" -path "*/models/model_epoch_*.pth" -type f | sort -V)
