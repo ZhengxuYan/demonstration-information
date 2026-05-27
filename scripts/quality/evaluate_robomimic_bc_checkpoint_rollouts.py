@@ -115,6 +115,20 @@ def prepare_obs(
     return obs
 
 
+def sanitize_env_metadata_for_local_robosuite(env_meta: dict) -> dict:
+    """Make checkpoint env metadata replayable under the robosuite version here."""
+    from render_low_dim_rollout_videos import normalize_controller_config, upgrade_controller_config
+
+    env_meta = upgrade_controller_config(deepcopy(env_meta))
+    env_meta = normalize_controller_config(env_meta)
+    env_kwargs = env_meta.get("env_kwargs", {})
+    # Datasets generated with robosuite 1.5 can store kwargs unsupported by
+    # robosuite 1.2.0, which is the eval environment currently in use.
+    for key in ("lite_physics",):
+        env_kwargs.pop(key, None)
+    return env_meta
+
+
 def rollout(
     policy,
     env,
@@ -168,6 +182,8 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
         device = TorchUtils.get_torch_device(try_to_use_cuda=True)
 
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=str(ckpt_path), device=device, verbose=False)
+    ckpt_dict = deepcopy(ckpt_dict)
+    ckpt_dict["env_metadata"] = sanitize_env_metadata_for_local_robosuite(ckpt_dict["env_metadata"])
     env, _ = FileUtils.env_from_checkpoint(
         ckpt_dict=ckpt_dict,
         render=False,
