@@ -102,15 +102,15 @@ def maybe_replace_agentview_with_left_close_low(obs: dict, env, enabled: bool, h
 
 def maybe_add_raw_robosuite_observations(obs: dict, env) -> dict:
     """Add low-dim observations that wrappers may have filtered from reset/step."""
-    raw_env = env.unwrapped if hasattr(env, "unwrapped") else env
-    if not hasattr(raw_env, "env") or not hasattr(raw_env.env, "_get_observations"):
+    base_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    if not hasattr(base_env, "get_observation"):
         return obs
 
     try:
-        raw_di = raw_env.env._get_observations(force_update=True)
-    except TypeError:
-        raw_di = raw_env.env._get_observations()
-    raw_obs = raw_env.get_observation(raw_di) if hasattr(raw_env, "get_observation") else raw_di
+        raw_obs = base_env.get_observation()
+    except Exception as exc:
+        print(f"WARNING: could not query raw robosuite observations: {exc}", file=sys.stderr)
+        return obs
 
     if not raw_obs:
         return obs
