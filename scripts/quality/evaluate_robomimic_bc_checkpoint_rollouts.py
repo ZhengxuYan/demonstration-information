@@ -258,6 +258,29 @@ def update_policy_obs_filter(policy, required_obs_shapes: dict) -> None:
             config.all_obs_keys = required_keys
 
 
+def image_camera_names_from_obs_shapes(required_obs_shapes: dict) -> list[str]:
+    cameras = []
+    for key in required_obs_shapes:
+        if key.endswith("_image"):
+            cameras.append(key.removesuffix("_image"))
+    return cameras
+
+
+def ensure_env_metadata_image_cameras(env_meta: dict, required_obs_shapes: dict, height: int, width: int) -> dict:
+    """Make eval env emit the same image observations the policy was trained on."""
+    cameras = image_camera_names_from_obs_shapes(required_obs_shapes)
+    if not cameras:
+        return env_meta
+    env_meta = deepcopy(env_meta)
+    env_kwargs = env_meta.setdefault("env_kwargs", {})
+    existing = list(env_kwargs.get("camera_names", []))
+    merged = list(dict.fromkeys(existing + cameras))
+    env_kwargs["camera_names"] = merged
+    env_kwargs["camera_heights"] = height
+    env_kwargs["camera_widths"] = width
+    return env_meta
+
+
 def missing_image_value(env, key: str, shape: tuple[int, ...], height: int, width: int) -> np.ndarray:
     camera_name = key.removesuffix("_image")
     try:
@@ -434,6 +457,12 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
     update_policy_obs_filter(policy, required_obs_shapes)
     ckpt_dict = deepcopy(ckpt_dict)
     ckpt_dict["env_metadata"] = sanitize_env_metadata_for_local_robosuite(ckpt_dict["env_metadata"])
+    ckpt_dict["env_metadata"] = ensure_env_metadata_image_cameras(
+        ckpt_dict["env_metadata"],
+        required_obs_shapes,
+        args.image_height,
+        args.image_width,
+    )
     env, _ = FileUtils.env_from_checkpoint(
         ckpt_dict=ckpt_dict,
         render=False,
