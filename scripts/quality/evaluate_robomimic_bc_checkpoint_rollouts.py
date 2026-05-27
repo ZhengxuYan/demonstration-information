@@ -216,10 +216,16 @@ def policy_required_obs_shapes(policy) -> dict:
     algo = getattr(policy, "policy", None)
     nets = getattr(algo, "nets", {})
     policy_net = nets.get("policy") if hasattr(nets, "get") else None
+    input_group_shapes = getattr(policy_net, "input_obs_group_shapes", None)
+    if input_group_shapes is not None and "obs" in input_group_shapes:
+        return dict(input_group_shapes["obs"])
     obs_shapes = getattr(policy_net, "obs_shapes", None)
     if obs_shapes is not None:
         return dict(obs_shapes)
-    encoder = getattr(getattr(policy_net, "nets", {}).get("encoder", None), "nets", {}).get("obs", None)
+    policy_nets = getattr(policy_net, "nets", {})
+    group_encoder = policy_nets.get("encoder") if hasattr(policy_nets, "get") else None
+    encoder_nets = getattr(group_encoder, "nets", {})
+    encoder = encoder_nets.get("obs") if hasattr(encoder_nets, "get") else None
     obs_shapes = getattr(encoder, "obs_shapes", None)
     return dict(obs_shapes) if obs_shapes is not None else {}
 
@@ -380,6 +386,7 @@ def evaluate_checkpoint(args: argparse.Namespace, ckpt_path: Path) -> dict:
 
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=str(ckpt_path), device=device, verbose=False)
     required_obs_shapes = policy_required_obs_shapes(policy)
+    print(f"policy_required_obs_keys={list(required_obs_shapes)}", flush=True)
     update_policy_obs_filter(policy, required_obs_shapes)
     ckpt_dict = deepcopy(ckpt_dict)
     ckpt_dict["env_metadata"] = sanitize_env_metadata_for_local_robosuite(ckpt_dict["env_metadata"])
