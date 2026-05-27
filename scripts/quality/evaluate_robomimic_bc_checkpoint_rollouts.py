@@ -123,6 +123,31 @@ def first_existing_attr(obj, names: tuple[str, ...]):
     return None
 
 
+def site_velocity(sim, site_id: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return site linear and angular velocity across mujoco_py and mujoco APIs."""
+    if hasattr(sim.data, "site_xvelp") and hasattr(sim.data, "site_xvelr"):
+        return (
+            np.asarray(sim.data.site_xvelp[site_id], dtype=np.float32),
+            np.asarray(sim.data.site_xvelr[site_id], dtype=np.float32),
+        )
+
+    try:
+        import mujoco
+
+        velocity = np.zeros(6, dtype=np.float64)
+        mujoco.mj_objectVelocity(
+            sim.model,
+            sim.data,
+            mujoco.mjtObj.mjOBJ_SITE,
+            int(site_id),
+            velocity,
+            0,
+        )
+        return velocity[3:].astype(np.float32), velocity[:3].astype(np.float32)
+    except Exception:
+        return np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
+
+
 def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
     if not hasattr(base_env, "env") or not hasattr(base_env.env, "robots"):
         return obs
@@ -167,9 +192,10 @@ def add_sim_lowdim_observations(obs: dict, base_env) -> dict:
     eef_site_id = first_existing_attr(robot, ("eef_site_id",))
     if eef_site_id is not None:
         eef_site_id = select_robot_value(eef_site_id, arm)
+        eef_vel_lin, eef_vel_ang = site_velocity(sim, eef_site_id)
         obs.setdefault("robot0_eef_pos", np.asarray(sim.data.site_xpos[eef_site_id], dtype=np.float32))
-        obs.setdefault("robot0_eef_vel_lin", np.asarray(sim.data.site_xvelp[eef_site_id], dtype=np.float32))
-        obs.setdefault("robot0_eef_vel_ang", np.asarray(sim.data.site_xvelr[eef_site_id], dtype=np.float32))
+        obs.setdefault("robot0_eef_vel_lin", eef_vel_lin)
+        obs.setdefault("robot0_eef_vel_ang", eef_vel_ang)
 
     eef_body_name = getattr(getattr(robot, "robot_model", None), "eef_name", None)
     if eef_body_name is not None and T is not None:
