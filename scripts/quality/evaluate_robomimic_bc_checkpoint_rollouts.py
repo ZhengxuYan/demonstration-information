@@ -85,6 +85,11 @@ def render_left_close_low_image(env, height: int, width: int) -> np.ndarray:
         raw_env.env.sim.forward()
 
 
+def render_camera_image(env, camera_name: str, height: int, width: int) -> np.ndarray:
+    raw_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    return raw_env.render(mode="rgb_array", height=height, width=width, camera_name=camera_name).copy()
+
+
 def maybe_add_left_close_low(obs: dict, env, enabled: bool, height: int, width: int) -> dict:
     if not enabled:
         return obs
@@ -253,12 +258,37 @@ def update_policy_obs_filter(policy, required_obs_shapes: dict) -> None:
             config.all_obs_keys = required_keys
 
 
-def ensure_required_observations(obs: dict, required_obs_shapes: dict) -> dict:
+def missing_image_value(env, key: str, shape: tuple[int, ...], height: int, width: int) -> np.ndarray:
+    camera_name = key.removesuffix("_image")
+    try:
+        return render_camera_image(env, camera_name=camera_name, height=height, width=width)
+    except Exception as exc:
+        if key not in MISSING_OBS_WARNED:
+            print(f"WARNING: could not render missing image {key} from camera {camera_name}: {exc}", file=sys.stderr)
+        if len(shape) == 3 and shape[0] in (1, 3):
+            return np.zeros((shape[1], shape[2], shape[0]), dtype=np.uint8)
+        return np.zeros(shape, dtype=np.uint8)
+
+
+def ensure_required_observations(
+    obs: dict,
+    env,
+    required_obs_shapes: dict,
+    image_height: int,
+    image_width: int,
+) -> dict:
     if not required_obs_shapes:
         return obs
     obs = deepcopy(obs)
     for key, shape in required_obs_shapes.items():
         if key in obs:
+            continue
+        shape = tuple(shape)
+        if key.endswith("_image"):
+            obs[key] = missing_image_value(env, key, shape, image_height, image_width)
+            if key not in MISSING_OBS_WARNED:
+                print(f"WARNING: rendered missing observation {key} shape={obs[key].shape}", file=sys.stderr)
+                MISSING_OBS_WARNED.add(key)
             continue
         if key == "robot0_eef_quat_site" and "robot0_eef_quat" in obs:
             obs[key] = np.asarray(obs["robot0_eef_quat"], dtype=np.float32)
@@ -266,9 +296,9 @@ def ensure_required_observations(obs: dict, required_obs_shapes: dict) -> dict:
         if key == "robot0_joint_acc" and "robot0_joint_vel" in obs:
             obs[key] = np.zeros_like(np.asarray(obs["robot0_joint_vel"], dtype=np.float32))
             continue
-        obs[key] = np.zeros(tuple(shape), dtype=np.float32)
+        obs[key] = np.zeros(shape, dtype=np.float32)
         if key not in MISSING_OBS_WARNED:
-            print(f"WARNING: filling missing observation {key} with zeros shape={tuple(shape)}", file=sys.stderr)
+            print(f"WARNING: filling missing observation {key} with zeros shape={shape}", file=sys.stderr)
             MISSING_OBS_WARNED.add(key)
     return obs
 
@@ -313,7 +343,7 @@ def prepare_obs(
     obs = maybe_replace_agentview_with_left_close_low(
         obs, env, left_close_low_as_agentview, image_height, image_width
     )
-    obs = ensure_required_observations(obs, required_obs_shapes)
+    obs = ensure_required_observations(obs, env, required_obs_shapes, image_height, image_width)
     return obs
 
 
