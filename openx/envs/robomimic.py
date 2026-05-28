@@ -102,6 +102,12 @@ class RobomimicEnv(gym.Env):
             env_meta = json.loads(f["data"].attrs["env_args"])
         env_meta = _sanitize_env_metadata_for_installed_robosuite(env_meta)
         self.use_image_obs = use_image_obs if use_image_obs is not None else env_meta["env_kwargs"]["use_camera_obs"]
+        if self.use_image_obs:
+            env_kwargs = env_meta["env_kwargs"]
+            env_kwargs["use_camera_obs"] = True
+            env_kwargs["camera_names"] = ["agentview", "robot0_eye_in_hand"]
+            env_kwargs.setdefault("camera_heights", 84)
+            env_kwargs.setdefault("camera_widths", 84)
         self.env = env_utils.create_env_from_metadata(
             env_meta=env_meta,
             env_name=env_meta["env_name"],
