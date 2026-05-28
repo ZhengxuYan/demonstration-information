@@ -30,6 +30,10 @@ source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-openx}"
 set -u
 
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+export LD_LIBRARY_PATH="/sailhome/jasonyan/.mujoco/mujoco210/bin:/usr/lib/nvidia:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_filter_bc_original_repro}"
 SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_inference}"

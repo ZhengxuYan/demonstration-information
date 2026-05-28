@@ -23,6 +23,10 @@ source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-openx}"
 set -u
 
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+export LD_LIBRARY_PATH="/sailhome/jasonyan/.mujoco/mujoco210/bin:/usr/lib/nvidia:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 DATASET_NAME="${DATASET_NAME:-pomdp_vla_square_rollouts_1400}"
 RLDS_PATH="${RLDS_PATH:-/iris/u/jasonyan/data/pomdp_vla_square_rollouts_1400_rlds/pomdp_vla_square_rollouts_1400/robo_mimic/1.0.0}"

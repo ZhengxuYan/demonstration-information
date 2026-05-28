@@ -1,5 +1,6 @@
 import json
 import os
+from copy import deepcopy
 from typing import Dict, Optional
 
 import gymnasium as gym
@@ -11,6 +12,79 @@ from robomimic.utils import env_utils
 from openx.data.utils import StateEncoding
 
 OBJECT_STATE_SIZE = 44  # Set to the max size across robomimic envs. ToolHang is giant.
+
+
+def _sanitize_env_metadata_for_installed_robosuite(env_meta: dict) -> dict:
+    """Adapt newer robosuite dataset metadata to the installed robosuite version."""
+    try:
+        import robosuite
+
+        version = tuple(int(part) for part in robosuite.__version__.split(".")[:2])
+    except Exception:
+        return env_meta
+
+    if version >= (1, 5):
+        return env_meta
+
+    env_meta = deepcopy(env_meta)
+    env_kwargs = env_meta.get("env_kwargs", {})
+
+    try:
+        from robosuite.controllers.composite.composite_controller_factory import (
+            refactor_composite_controller_config,
+        )
+
+        controller_config = env_kwargs.get("controller_configs")
+        robots = env_kwargs.get("robots", [])
+        if controller_config is not None and robots:
+            robot_type = robots[0] if isinstance(robots, (list, tuple)) else robots
+            env_kwargs["controller_configs"] = refactor_composite_controller_config(
+                controller_config=controller_config,
+                robot_type=robot_type,
+                arms=["right"],
+            )
+    except Exception:
+        pass
+
+    try:
+        from robosuite.controllers import load_controller_config
+
+        controller_config = env_kwargs.get("controller_configs")
+        if isinstance(controller_config, dict):
+            controller_type = controller_config.get("type")
+            if controller_type == "BASIC" and isinstance(controller_config.get("body_parts"), dict):
+                body_parts = controller_config["body_parts"]
+                for key in ("right", "arm0", "robot0_right"):
+                    part_config = body_parts.get(key)
+                    if isinstance(part_config, dict) and part_config.get("type"):
+                        controller_config = part_config
+                        controller_type = controller_config.get("type")
+                        break
+                else:
+                    for part_config in body_parts.values():
+                        if (
+                            isinstance(part_config, dict)
+                            and part_config.get("type")
+                            and "gripper" not in part_config.get("type", "").lower()
+                        ):
+                            controller_config = part_config
+                            controller_type = controller_config.get("type")
+                            break
+            if controller_type:
+                try:
+                    merged = load_controller_config(default_controller=controller_type)
+                except Exception:
+                    merged = {}
+                if isinstance(merged, dict):
+                    merged.update(controller_config)
+                    merged.setdefault("interpolation", None)
+                    env_kwargs["controller_configs"] = merged
+    except Exception:
+        pass
+
+    for key in ("lite_physics",):
+        env_kwargs.pop(key, None)
+    return env_meta
 
 
 class RobomimicEnv(gym.Env):
@@ -26,6 +100,7 @@ class RobomimicEnv(gym.Env):
         path = os.path.expanduser(path)
         with h5py.File(tf.io.gfile.GFile(path, "rb"), "r") as f:
             env_meta = json.loads(f["data"].attrs["env_args"])
+        env_meta = _sanitize_env_metadata_for_installed_robosuite(env_meta)
         self.use_image_obs = use_image_obs if use_image_obs is not None else env_meta["env_kwargs"]["use_camera_obs"]
         self.env = env_utils.create_env_from_metadata(
             env_meta=env_meta,
