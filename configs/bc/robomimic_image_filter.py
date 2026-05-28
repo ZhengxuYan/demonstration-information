@@ -124,6 +124,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
         env.replace("/", "_"): ModuleSpec.create(
             RobomimicEnv,
             path=env_hdf5_path,
+            use_image_obs=True,
             horizon=400,
         )
     }
