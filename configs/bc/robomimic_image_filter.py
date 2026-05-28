@@ -20,9 +20,26 @@ from openx.utils.spec import ModuleSpec
 def get_config(config_str: str = "square/mh,50,ksg,1"):
     # Parse the config string -- used for sweeping.
     # Define the structure
-    env, percentile, estimator, seed = config_str.split(",")
+    parts = config_str.split(",")
+    if len(parts) not in {4, 5, 6, 7}:
+        raise ValueError(
+            "Expected env,percentile,estimator,seed[,score_root[,dataset_path[,env_hdf5_path]]]. "
+            f"Got: {config_str}"
+        )
+    env, percentile, estimator, seed = parts[:4]
+    score_root = parts[4] if len(parts) >= 5 and parts[4] else "/iris/u/jasonyan/data/deminf_outputs/robomimic_image_inference"
+    dataset_path = (
+        parts[5]
+        if len(parts) >= 6 and parts[5]
+        else "/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0"
+    )
+    env_hdf5_path = (
+        parts[6]
+        if len(parts) >= 7 and parts[6]
+        else "/iris/u/jasonyan/data/robomimic/{env}/image.hdf5".format(env=env)
+    )
     filter_path = os.path.join(
-        "/iris/u/jasonyan/data/deminf_outputs/robomimic_image_inference/",
+        score_root,
         env.replace("/", "_"),
         estimator,
         "seed-" + str(((int(seed) - 1) % 3) + 1),
@@ -53,7 +70,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
     dataloader = dict(
         datasets={
             env.replace("/", "_"): dict(
-                path="/iris/u/jasonyan/data/robomimic_rlds_v2/robo_mimic/1.0.0",
+                path=dataset_path,
                 train_split="train",
                 val_split="val",
                 transform=ModuleSpec.create(robomimic_dataset_transform),
@@ -106,7 +123,7 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
     envs = {
         env.replace("/", "_"): ModuleSpec.create(
             RobomimicEnv,
-            path="/iris/u/jasonyan/data/robomimic/{env}/image.hdf5".format(env=env),
+            path=env_hdf5_path,
             horizon=400,
         )
     }

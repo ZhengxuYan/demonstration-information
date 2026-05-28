@@ -1,8 +1,8 @@
 #!/bin/bash
 # Train upstream OpenX filtered BC on Robomimic-MH image datasets.
 #
-# This calls configs/bc/robomimic_image_filter.py with:
-#   env, percentile, estimator, seed
+# This calls configs/bc/robomimic_image_filter.py with the original Robomimic
+# RLDS and HDF5 defaults, plus an explicit score root.
 #
 # By default this runs the config default percentile 50 for all MH envs / seeds.
 # Override PERCENTILES to sweep more filters, e.g.:
@@ -32,6 +32,7 @@ set -u
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_filter_bc_original_repro}"
+SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_inference}"
 ENVS="${ENVS:-lift/mh can/mh square/mh}"
 PERCENTILES="${PERCENTILES:-50}"
 ESTIMATOR="${ESTIMATOR:-ksg}"
@@ -61,7 +62,7 @@ ENV_NAME="${ENV_ARRAY[$ENV_IDX]}"
 PERCENTILE="${PERCENTILE_ARRAY[$PERCENTILE_IDX]}"
 SEED="${SEED_ARRAY[$SEED_IDX]}"
 ENV_TAG="${ENV_NAME//\//_}"
-SCORE_PKL="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_inference}/${ENV_TAG}/${ESTIMATOR}/seed-${SEED}/${ENV_TAG}.pkl"
+SCORE_PKL="${SCORE_ROOT}/${ENV_TAG}/${ESTIMATOR}/seed-${SEED}/${ENV_TAG}.pkl"
 RUN_NAME="config-robomimic_image_filter_env-${ENV_TAG}_percentile-${PERCENTILE}_estimator-${ESTIMATOR}_seed-${SEED}"
 
 if [[ ! -f "${SCORE_PKL}" ]]; then
@@ -84,7 +85,7 @@ echo "run_name=${RUN_NAME}"
 echo "out_root=${OUT_ROOT}"
 
 python scripts/train.py \
-  --config="configs/bc/robomimic_image_filter.py:${ENV_NAME},${PERCENTILE},${ESTIMATOR},${SEED}" \
+  --config="configs/bc/robomimic_image_filter.py:${ENV_NAME},${PERCENTILE},${ESTIMATOR},${SEED},${SCORE_ROOT}" \
   --path="${OUT_ROOT}" \
   --name="${RUN_NAME}" \
   --project="${WANDB_PROJECT:-original-mh-bc-repro}" \
