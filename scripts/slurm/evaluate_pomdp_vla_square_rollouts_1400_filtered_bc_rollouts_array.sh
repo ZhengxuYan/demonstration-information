@@ -2,7 +2,7 @@
 # Evaluate available checkpoints for POMDP-VLA filtered BC policies.
 #
 # Usage:
-#   CONDA_ENV=openx sbatch --array=1-4%4 scripts/slurm/evaluate_pomdp_vla_square_rollouts_1400_filtered_bc_rollouts_array.sh
+#   CONDA_ENV=robodiff sbatch --array=1-4%4 scripts/slurm/evaluate_pomdp_vla_square_rollouts_1400_filtered_bc_rollouts_array.sh
 
 #SBATCH --partition=iris-hi
 #SBATCH --account=iris
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
-CONDA_ENV="${CONDA_ENV:-openx}"
+CONDA_ENV="${CONDA_ENV:-robodiff}"
 
 CKPT_ROOT=/iris/u/jasonyan/data/robomimic_outputs/pomdp_vla_square_rollouts_1400_filtered_bc
 OUT_ROOT=/iris/u/jasonyan/data/robomimic_rollout_scores/pomdp_vla_square_rollouts_1400_filtered_bc
