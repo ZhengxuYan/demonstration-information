@@ -61,7 +61,7 @@ ENV_NAME="${ENV_ARRAY[$ENV_IDX]}"
 PERCENTILE="${PERCENTILE_ARRAY[$PERCENTILE_IDX]}"
 SEED="${SEED_ARRAY[$SEED_IDX]}"
 ENV_TAG="${ENV_NAME//\//_}"
-SCORE_PKL="/iris/u/jasonyan/data/deminf_outputs/robomimic_image_inference/${ENV_TAG}/${ESTIMATOR}/seed-${SEED}/${ENV_TAG}.pkl"
+SCORE_PKL="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_inference}/${ENV_TAG}/${ESTIMATOR}/seed-${SEED}/${ENV_TAG}.pkl"
 RUN_NAME="config-robomimic_image_filter_env-${ENV_TAG}_percentile-${PERCENTILE}_estimator-${ESTIMATOR}_seed-${SEED}"
 
 if [[ ! -f "${SCORE_PKL}" ]]; then

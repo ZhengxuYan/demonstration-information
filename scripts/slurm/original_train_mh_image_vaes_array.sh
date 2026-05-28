@@ -29,7 +29,7 @@ conda activate "${CONDA_ENV:-openx}"
 set -u
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
-OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_original_repro}"
+OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_original_repro}"
 ENVS="${ENVS:-lift/mh can/mh square/mh}"
 TYPES="${TYPES:-s a}"
 SEEDS="${SEEDS:-1 2 3}"
@@ -72,7 +72,7 @@ echo "run_name=${RUN_NAME}"
 echo "out_root=${OUT_ROOT}"
 
 python scripts/train.py \
-  --config="configs/quality/vae_robomimic_image.py:${ENV_NAME},${CONFIG_TYPE},${SEED}" \
+  --config="configs/quality/vae_robomimic_image.py:${ENV_NAME},${CONFIG_TYPE},${SEED},agent" \
   --path="${OUT_ROOT}" \
   --name="${RUN_NAME}" \
   --project="${WANDB_PROJECT:-original-mh-deminf-repro}" \

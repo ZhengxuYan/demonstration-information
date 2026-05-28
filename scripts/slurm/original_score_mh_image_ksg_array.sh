@@ -28,8 +28,8 @@ conda activate "${CONDA_ENV:-openx}"
 set -u
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
-VAE_ROOT="${VAE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_original_repro}"
-SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_inference}"
+VAE_ROOT="${VAE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_original_repro}"
+SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/deminf_outputs/robomimic_image_agent_inference}"
 ENVS="${ENVS:-lift/mh can/mh square/mh}"
 SEEDS="${SEEDS:-1 2 3}"
 
