@@ -2,7 +2,7 @@
 # Evaluate available checkpoints for POMDP-VLA filtered BC policies.
 #
 # Usage:
-#   CONDA_ENV=robodiff sbatch --array=1-4%4 scripts/slurm/evaluate_pomdp_vla_square_rollouts_1400_filtered_bc_rollouts_array.sh
+#   CONDA_ENV=robodiff15 sbatch --array=1-4%4 scripts/slurm/evaluate_pomdp_vla_square_rollouts_1400_filtered_bc_rollouts_array.sh
 
 #SBATCH --partition=iris-hi
 #SBATCH --account=iris
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
-CONDA_ENV="${CONDA_ENV:-robodiff}"
+CONDA_ENV="${CONDA_ENV:-robodiff15}"
 
 CKPT_ROOT=/iris/u/jasonyan/data/robomimic_outputs/pomdp_vla_square_rollouts_1400_filtered_bc
 OUT_ROOT=/iris/u/jasonyan/data/robomimic_rollout_scores/pomdp_vla_square_rollouts_1400_filtered_bc
@@ -32,7 +32,7 @@ EPOCH_START="${EPOCH_START:-50}"
 EPOCH_END="${EPOCH_END:-2000}"
 EPOCH_STEP="${EPOCH_STEP:-50}"
 SKIP_MISSING_EPOCHS="${SKIP_MISSING_EPOCHS:-1}"
-ROBOSUITE_MIN_VERSION="${ROBOSUITE_MIN_VERSION:-1.2.0}"
+ROBOSUITE_MIN_VERSION="${ROBOSUITE_MIN_VERSION:-1.5.0}"
 
 export REPO CONDA_ENV CKPT_ROOT OUT_ROOT DATASETS DROP_PCTS ALGO N_ROLLOUTS HORIZON EPOCH_START EPOCH_END EPOCH_STEP SKIP_MISSING_EPOCHS ROBOSUITE_MIN_VERSION
 
