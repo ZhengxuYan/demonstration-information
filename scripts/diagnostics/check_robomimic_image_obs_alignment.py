@@ -59,6 +59,10 @@ def _to_uint8_image(x: Any) -> np.ndarray:
     elif hasattr(x, "numpy"):
         x = x.numpy()
     x = np.asarray(x)
+    if x.shape == () and x.dtype.kind in ("S", "O"):
+        x = tf.io.decode_image(x.item(), channels=3, expand_animations=False).numpy()
+    elif x.ndim == 1 and x.size == 1 and x.dtype.kind in ("S", "O"):
+        x = tf.io.decode_image(x[0], channels=3, expand_animations=False).numpy()
     if x.ndim == 4:
         x = x[0]
     if x.dtype != np.uint8:
