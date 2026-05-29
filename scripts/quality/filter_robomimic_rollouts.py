@@ -15,7 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inputs", nargs="+", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--num-demos", type=int, default=1000)
+    parser.add_argument("--num-demos", type=int, default=1000, help="0 keeps all demos after filtering.")
+    parser.add_argument("--success-only", action="store_true", help="Drop demos whose success flag is false.")
     parser.add_argument("--valid-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
@@ -81,10 +82,14 @@ def main() -> None:
                         "horizon": horizon,
                     }
                 )
+    if args.success_only:
+        candidates = [row for row in candidates if row["success"]]
     candidates.sort(key=lambda row: (-row["success"], row["horizon"], -row["return"], str(row["path"]), row["key"]))
-    selected = candidates[: args.num_demos]
-    if len(selected) < args.num_demos:
+    selected = candidates if args.num_demos == 0 else candidates[: args.num_demos]
+    if args.num_demos > 0 and len(selected) < args.num_demos:
         raise ValueError(f"Only found {len(selected)} demos, requested {args.num_demos}")
+    if not selected:
+        raise ValueError("No demos selected.")
 
     total = 0
     new_keys = []
