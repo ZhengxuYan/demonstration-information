@@ -95,7 +95,7 @@ def _image_metrics(a: np.ndarray, b: np.ndarray) -> dict:
     }
 
 
-def _load_env_meta(dataset_path: str) -> dict:
+def _load_env_meta(dataset_path: str, render_gpu_device_id: int | None = None) -> dict:
     with h5py.File(os.path.expanduser(dataset_path), "r") as f:
         env_meta = json.loads(f["data"].attrs["env_args"])
     env_meta = _sanitize_env_metadata_for_installed_robosuite(env_meta)
@@ -105,10 +105,12 @@ def _load_env_meta(dataset_path: str) -> dict:
     env_kwargs["camera_names"] = ["agentview", "robot0_eye_in_hand"]
     env_kwargs.setdefault("camera_heights", 84)
     env_kwargs.setdefault("camera_widths", 84)
+    if render_gpu_device_id is not None:
+        env_kwargs["render_gpu_device_id"] = render_gpu_device_id
     return env_meta
 
 
-def _make_resettable_env(dataset_path: str):
+def _make_resettable_env(dataset_path: str, render_gpu_device_id: int | None = None):
     ObsUtils.initialize_obs_utils_with_obs_specs(
         obs_modality_specs={
             "obs": {
@@ -124,7 +126,7 @@ def _make_resettable_env(dataset_path: str):
             }
         }
     )
-    env_meta = _load_env_meta(dataset_path)
+    env_meta = _load_env_meta(dataset_path, render_gpu_device_id=render_gpu_device_id)
     env = env_utils.create_env_from_metadata(
         env_meta=env_meta,
         env_name=env_meta["env_name"],
@@ -141,8 +143,13 @@ def _demo_names(f, max_demos: int):
     return demos[:max_demos]
 
 
-def _export_hdf5_vs_env(hdf5_path: str, output_dir: Path, max_demos: int):
-    env = _make_resettable_env(hdf5_path)
+def _export_hdf5_vs_env(
+    hdf5_path: str,
+    output_dir: Path,
+    max_demos: int,
+    render_gpu_device_id: int | None = None,
+):
+    env = _make_resettable_env(hdf5_path, render_gpu_device_id=render_gpu_device_id)
     rows = []
 
     with h5py.File(os.path.expanduser(hdf5_path), "r") as f:
@@ -237,11 +244,17 @@ def main():
     parser.add_argument("--rlds", default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max_demos", type=int, default=3)
+    parser.add_argument("--render_gpu_device_id", type=int, default=None)
     args = parser.parse_args()
 
     output_dir = Path(args.output).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows = _export_hdf5_vs_env(args.hdf5, output_dir=output_dir / "hdf5_vs_env", max_demos=args.max_demos)
+    rows = _export_hdf5_vs_env(
+        args.hdf5,
+        output_dir=output_dir / "hdf5_vs_env",
+        max_demos=args.max_demos,
+        render_gpu_device_id=args.render_gpu_device_id,
+    )
     with (output_dir / "image_metrics.json").open("w") as f:
         json.dump(rows, f, indent=2)
     if args.rlds:
