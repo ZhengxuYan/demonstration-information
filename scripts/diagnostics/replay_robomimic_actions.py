@@ -12,6 +12,7 @@ from copy import deepcopy
 
 import h5py
 import numpy as np
+from robomimic.utils import obs_utils as ObsUtils
 from robomimic.utils import env_utils
 
 from openx.envs.robomimic import _sanitize_env_metadata_for_installed_robosuite
@@ -32,6 +33,21 @@ def _load_env_meta(dataset_path: str, use_image_obs: bool) -> dict:
 
 
 def _make_env(dataset_path: str, use_image_obs: bool):
+    ObsUtils.initialize_obs_utils_with_obs_specs(
+        obs_modality_specs={
+            "obs": {
+                "low_dim": [
+                    "object",
+                    "robot0_eef_pos",
+                    "robot0_eef_quat",
+                    "robot0_gripper_qpos",
+                    "robot0_joint_pos",
+                    "robot0_joint_vel",
+                ],
+                "rgb": ["agentview_image", "robot0_eye_in_hand_image"] if use_image_obs else [],
+            }
+        }
+    )
     env_meta = _load_env_meta(dataset_path, use_image_obs=use_image_obs)
     env = env_utils.create_env_from_metadata(
         env_meta=env_meta,
