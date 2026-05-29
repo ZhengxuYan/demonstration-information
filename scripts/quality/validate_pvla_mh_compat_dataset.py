@@ -80,6 +80,8 @@ def validate_masks(f: h5py.File, demos: list[str]) -> None:
     assert_true(valid, "mask/valid is empty")
     assert_true(set(train).isdisjoint(valid), "train and valid masks overlap")
     assert_true(set(train + valid) == set(demos), "train+valid masks do not cover all demos")
+    for key in ("better", "okay", "worse"):
+        assert_true(key in mask, f"missing mask/{key}")
     finite_quality_mask = None
     for key in ("better", "okay", "worse"):
         keys = read_mask(mask, key)

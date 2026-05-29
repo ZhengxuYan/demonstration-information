@@ -193,7 +193,9 @@ def write_masks(out_file: h5py.File, demo_keys: list[str], valid_ratio: float, s
 
     mask.create_dataset("train", data=encoded(train))
     mask.create_dataset("valid", data=encoded(valid))
-    mask.create_dataset(quality_mask, data=encoded(demo_keys))
+    for key in ("better", "okay", "worse"):
+        keys = demo_keys if key == quality_mask else []
+        mask.create_dataset(key, data=encoded(keys))
     out_file.attrs["mask_valid_ratio"] = float(valid_ratio)
     out_file.attrs["mask_split_seed"] = int(seed)
     out_file.attrs["quality_mask"] = quality_mask
