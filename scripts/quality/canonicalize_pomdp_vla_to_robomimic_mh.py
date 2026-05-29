@@ -152,10 +152,10 @@ def ensure_zero_lowdim(demo: h5py.Group, length: int) -> None:
     next_obs = demo.require_group("next_obs")
     for key, trailing_shape in ZERO_LOW_DIM_SPECS.items():
         shape = (length, *trailing_shape)
-        if key not in obs:
-            obs.create_dataset(key, data=np.zeros(shape, dtype=np.float32))
-        if key not in next_obs:
-            next_obs.create_dataset(key, data=shifted_next(obs[key][:].astype(np.float32)))
+        if key not in obs or obs[key].shape != shape:
+            upsert_dataset(obs, key, np.zeros(shape, dtype=np.float32))
+        if key not in next_obs or next_obs[key].shape != shape:
+            upsert_dataset(next_obs, key, shifted_next(obs[key][:].astype(np.float32)))
 
 
 def ensure_rewards_dones(demo: h5py.Group, length: int) -> None:
