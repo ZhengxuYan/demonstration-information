@@ -215,12 +215,24 @@ def _export_rlds_sample(rlds_path: str, output_dir: Path):
     def _take_first(x):
         return x[:1] if hasattr(x, "shape") and len(x.shape) > 0 else x
 
+    if "episode_metadata" in ep:
+        print("\nepisode metadata summary:")
+        for line in _tree_summary(ep["episode_metadata"]):
+            print(line)
+
     print("\nraw RLDS step summary:")
     for line in _tree_summary(tf.nest.map_structure(_take_first, steps)):
         print(line)
 
+    steps_for_transform = dict(steps)
+    if "episode_metadata" in ep:
+        ep_len = tf.shape(steps["is_first"])[0]
+        steps_for_transform["episode_metadata"] = tf.nest.map_structure(
+            lambda x: tf.repeat(x, ep_len), ep["episode_metadata"]
+        )
+
     try:
-        transformed = robomimic_dataset_transform(dict(steps))
+        transformed = robomimic_dataset_transform(steps_for_transform)
     except Exception as e:
         print(f"\nRLDS transform failed: {type(e).__name__}: {e}")
         return
