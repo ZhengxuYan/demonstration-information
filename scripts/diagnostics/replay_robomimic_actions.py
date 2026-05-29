@@ -76,7 +76,13 @@ def _demo_names(f, max_demos: int | None):
     return demos
 
 
-def replay_dataset(dataset_path: str, max_demos: int | None, horizon: int | None, use_image_obs: bool):
+def replay_dataset(
+    dataset_path: str,
+    max_demos: int | None,
+    horizon: int | None,
+    use_image_obs: bool,
+    allow_model_fallback: bool,
+):
     env = _make_env(dataset_path, use_image_obs=use_image_obs)
     rows = []
 
@@ -91,7 +97,20 @@ def replay_dataset(dataset_path: str, max_demos: int | None, horizon: int | None
             if model_file is not None:
                 initial_state["model"] = model_file
 
-            env.reset_to(initial_state)
+            used_model_file = "model" in initial_state
+            try:
+                env.reset_to(initial_state)
+            except Exception as e:
+                if not (allow_model_fallback and "model" in initial_state):
+                    raise
+                print(
+                    f"{demo}: model_file reset failed ({type(e).__name__}: {e}); "
+                    "falling back to default env XML + recorded state",
+                    flush=True,
+                )
+                initial_state = {"states": states[0]}
+                used_model_file = False
+                env.reset_to(initial_state)
             ep_reward = 0.0
             success = _success_from_env(env)
             steps = min(actions.shape[0], horizon) if horizon is not None else actions.shape[0]
@@ -113,11 +132,13 @@ def replay_dataset(dataset_path: str, max_demos: int | None, horizon: int | None
                     "reward": ep_reward,
                     "success": bool(success),
                     "first_success_step": first_success_step,
+                    "used_model_file": used_model_file,
                 }
             )
             print(
                 f"{demo}: success={int(success)} reward={ep_reward:.3f} "
-                f"len={actions.shape[0]} played={steps} first_success_step={first_success_step}",
+                f"len={actions.shape[0]} played={steps} first_success_step={first_success_step} "
+                f"used_model_file={int(used_model_file)}",
                 flush=True,
             )
 
@@ -128,6 +149,8 @@ def replay_dataset(dataset_path: str, max_demos: int | None, horizon: int | None
     print(f"num_demos={len(rows)}")
     print(f"success_rate={success_rate:.4f}")
     print(f"mean_reward={mean_reward:.4f}")
+    if rows:
+        print(f"used_model_file_rate={np.mean([row['used_model_file'] for row in rows]):.4f}")
     return rows
 
 
@@ -137,12 +160,18 @@ def main():
     parser.add_argument("--max_demos", type=int, default=50)
     parser.add_argument("--horizon", type=int, default=None)
     parser.add_argument("--use_image_obs", action="store_true")
+    parser.add_argument(
+        "--no_model_fallback",
+        action="store_true",
+        help="Fail instead of falling back when a per-demo model_file XML cannot be loaded.",
+    )
     args = parser.parse_args()
     replay_dataset(
         dataset_path=args.dataset,
         max_demos=args.max_demos,
         horizon=args.horizon,
         use_image_obs=args.use_image_obs,
+        allow_model_fallback=not args.no_model_fallback,
     )
 
 
