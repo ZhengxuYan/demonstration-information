@@ -17,6 +17,18 @@ from openx.networks.core import Concatenate, MultiEncoder
 from openx.utils.spec import ModuleSpec
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    return default if raw is None or raw == "" else int(raw)
+
+
 def get_config(config_str: str = "square/mh,50,ksg,1"):
     # Parse the config string -- used for sweeping.
     # Define the structure
@@ -81,10 +93,10 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
         n_action=4,
         augment_kwargs=dict(scale_range=(0.85, 1.0), aspect_ratio_range=None),
         shuffle_size=100000,
-        batch_size=128,
+        batch_size=_env_int("BC_BATCH_SIZE", 128),
         recompute_statistics=False,
-        cache=True,  # Small enough to stay in memory
-        prefetch=tf.data.AUTOTUNE,  # Enable prefetch.
+        cache=_env_bool("BC_CACHE", True),  # Disable for larger datasets / memory-constrained jobs.
+        prefetch=_env_int("BC_PREFETCH", tf.data.AUTOTUNE),  # Enable prefetch by default.
     )
 
     alg = ModuleSpec.create(
@@ -142,9 +154,9 @@ def get_config(config_str: str = "square/mh,50,ksg,1"):
             val_freq=10000,
             eval_freq=100000,
             save_freq=100000,
-            val_steps=32,
-            n_eval_proc=50,
-            eval_ep=200,
+            val_steps=_env_int("BC_VAL_STEPS", 32),
+            n_eval_proc=_env_int("BC_N_EVAL_PROC", 50),
+            eval_ep=_env_int("BC_EVAL_EP", 200),
             exec_horizon=2,
             seed=int(seed),
         )
