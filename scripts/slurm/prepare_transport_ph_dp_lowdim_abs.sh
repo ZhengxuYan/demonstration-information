@@ -56,9 +56,19 @@ with h5py.File(dst, "r+") as f:
     if isinstance(env_args, bytes):
         env_args = env_args.decode()
     meta = json.loads(env_args)
+    env_kwargs = meta["env_kwargs"]
     # Robosuite 1.5 datasets include this kwarg, but the robodiff env used for
     # these DP runs is older and rejects it during env construction.
-    meta.get("env_kwargs", {}).pop("lite_physics", None)
+    env_kwargs.pop("lite_physics", None)
+    # Robosuite 1.5 stores two-arm controllers as a composite BASIC controller.
+    # The robodiff environment uses the older per-robot OSC_POSE config format.
+    controller = env_kwargs.get("controller_configs")
+    if isinstance(controller, dict) and controller.get("type") == "BASIC":
+        body_parts = controller.get("body_parts", {})
+        osc_pose = dict(body_parts.get("right") or next(iter(body_parts.values())))
+        osc_pose.pop("input_ref_frame", None)
+        osc_pose.pop("gripper", None)
+        env_kwargs["controller_configs"] = osc_pose
     f["data"].attrs["env_args"] = json.dumps(meta, indent=4)
 print(dst)
 PY
