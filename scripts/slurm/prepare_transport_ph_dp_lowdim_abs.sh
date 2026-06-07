@@ -23,6 +23,7 @@ set -u
 DP_REPO="${DP_REPO:-/iris/u/jasonyan/repos/diffusion_policy}"
 DATA_DIR="${DATA_DIR:-/iris/u/jasonyan/data/diffusion_policy/robomimic/datasets/transport/ph}"
 INPUT_HDF5="${INPUT_HDF5:-${DATA_DIR}/low_dim_v15.hdf5}"
+COMPAT_HDF5="${COMPAT_HDF5:-${DATA_DIR}/low_dim_v15_robodiff_compat.hdf5}"
 OUTPUT_HDF5="${OUTPUT_HDF5:-${DATA_DIR}/low_dim_abs.hdf5}"
 EVAL_DIR="${EVAL_DIR:-${DATA_DIR}/abs_conversion_eval}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
@@ -42,6 +43,26 @@ if [[ ! -f "${INPUT_HDF5}" ]]; then
 fi
 ls -lh "${INPUT_HDF5}"
 
+python - <<PY
+import h5py
+import json
+import shutil
+
+src = "${INPUT_HDF5}"
+dst = "${COMPAT_HDF5}"
+shutil.copy2(src, dst)
+with h5py.File(dst, "r+") as f:
+    env_args = f["data"].attrs["env_args"]
+    if isinstance(env_args, bytes):
+        env_args = env_args.decode()
+    meta = json.loads(env_args)
+    # Robosuite 1.5 datasets include this kwarg, but the robodiff env used for
+    # these DP runs is older and rejects it during env construction.
+    meta.get("env_kwargs", {}).pop("lite_physics", None)
+    f["data"].attrs["env_args"] = json.dumps(meta, indent=4)
+print(dst)
+PY
+
 cd "${DP_REPO}"
 
 export MUJOCO_GL=egl
@@ -55,7 +76,7 @@ rm -f "${OUTPUT_HDF5}"
 rm -rf "${EVAL_DIR}"
 
 python diffusion_policy/scripts/robomimic_dataset_conversion.py \
-  --input "${INPUT_HDF5}" \
+  --input "${COMPAT_HDF5}" \
   --output "${OUTPUT_HDF5}" \
   --eval_dir "${EVAL_DIR}" \
   --num_workers "${NUM_WORKERS}"
