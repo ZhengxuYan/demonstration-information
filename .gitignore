@@ -212,3 +212,13 @@ downloaded_results/
 observability_annotation_app/
 tmp_video_checks/
 camera_view_previews/
+deminf_camera_view_check_videos/
+deminf_camera_view_scores_trained/
+droid_full_candidates/
+droid_pen_cup_annotation_app/
+droid_samples/
+droid_videos/
+libero_final_selected_vercel/
+libero_task_video_samples/
+pomdp_vla_seed1_annotation/
+pomdp_vla_square_rollouts/
