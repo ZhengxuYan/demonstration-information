@@ -32,17 +32,24 @@ def get_config(config_str="pen_in_cup,25,random,1"):
     dataset_path = parts[5] if len(parts) >= 6 else os.environ.get("PEN_IN_CUP_RLDS_PATH", DEFAULT_DATASET_PATH)
     seed = int(seed)
 
-    if estimator != "random":
-        raise ValueError(f"Only estimator='random' is supported by this config, got {estimator!r}")
-
     drop_percent = float(drop_percent)
-    filter_path = os.path.join(
-        score_root,
-        env.replace("/", "_"),
-        estimator,
-        "seed-" + str(seed),
-        f"random_drop_{int(drop_percent):02d}_seed{seed}.pkl",
-    )
+    if estimator == "random":
+        filter_path = os.path.join(
+            score_root,
+            env.replace("/", "_"),
+            estimator,
+            "seed-" + str(seed),
+            f"random_drop_{int(drop_percent):02d}_seed{seed}.pkl",
+        )
+    elif estimator in ("observability", "optimality"):
+        filter_path = os.path.join(
+            score_root,
+            env.replace("/", "_"),
+            estimator,
+            f"{estimator}_scores.pkl",
+        )
+    else:
+        raise ValueError(f"Unsupported estimator={estimator!r}; expected random, observability, or optimality")
 
     structure = {
         "observation": {

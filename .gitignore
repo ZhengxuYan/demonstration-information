@@ -6,6 +6,8 @@ square_mh_wrist_ksg_seed1/
 square_mh_wrist_review/
 square_mh_wrist_manual_share/
 trajectory_score_plots/
+pen_in_cup_annotation_app/
+pen_in_cup_human_label_scores/
 .DS_Store
 
 # Byte-compiled / optimized / DLL files
