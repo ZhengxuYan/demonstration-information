@@ -35,12 +35,13 @@ def get_config(config_str="pen_in_cup,25,random,1"):
     if estimator != "random":
         raise ValueError(f"Only estimator='random' is supported by this config, got {estimator!r}")
 
+    drop_percent = float(drop_percent)
     filter_path = os.path.join(
         score_root,
         env.replace("/", "_"),
         estimator,
         "seed-" + str(seed),
-        f"random_drop_{int(float(drop_percent)):02d}_seed{seed}.pkl",
+        f"random_drop_{int(drop_percent):02d}_seed{seed}.pkl",
     )
 
     structure = {
@@ -63,14 +64,19 @@ def get_config(config_str="pen_in_cup,25,random,1"):
             },
         },
     }
+    dataset_config = dict(
+        path=dataset_path,
+        train_split="train",
+        transform=ModuleSpec.create(droid_dataset_transform),
+    )
+    if drop_percent > 0:
+        dataset_config["train_filter"] = ModuleSpec.create(
+            filter_by_scores, filter_path, "ep_idx", percentile=drop_percent
+        )
+
     dataloader = dict(
         datasets={
-            env.replace("/", "_"): dict(
-                path=dataset_path,
-                train_split="train",
-                transform=ModuleSpec.create(droid_dataset_transform),
-                train_filter=ModuleSpec.create(filter_by_scores, filter_path, "ep_idx", percentile=float(drop_percent)),
-            ),
+            env.replace("/", "_"): dataset_config,
         },
         n_obs=2,
         n_action=16,

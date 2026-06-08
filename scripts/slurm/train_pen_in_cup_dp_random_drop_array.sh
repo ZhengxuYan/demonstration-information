@@ -2,7 +2,7 @@
 # Train DemInf/OpenX image-based diffusion policies for pen-in-cup random episode drops.
 #
 # Usage:
-#   sbatch --array=1-3%3 scripts/slurm/train_pen_in_cup_dp_random_drop_array.sh
+#   sbatch --array=1-4%4 scripts/slurm/train_pen_in_cup_dp_random_drop_array.sh
 
 #SBATCH --partition=iris-hi
 #SBATCH --account=iris
@@ -31,7 +31,7 @@ REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 RLDS_PATH="${RLDS_PATH:-/iris/u/jasonyan/data/droid_pen_in_cup_06072026_rlds/droid_pen_in_cup/1.0.0}"
 SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/droid_pen_in_cup_06072026_random_drop_scores}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/deminf_dp_pen_in_cup_06072026}"
-DROP_PERCENTS="${DROP_PERCENTS:-25 50 75}"
+DROP_PERCENTS="${DROP_PERCENTS:-0 25 50 75}"
 SEED="${SEED:-1}"
 PROJECT="${WANDB_PROJECT:-deminf-dp-pen-in-cup}"
 
@@ -46,14 +46,18 @@ fi
 
 DROP_PERCENT="${DROP_ARRAY[$((TASK_ID - 1))]}"
 SCORE_PKL="${SCORE_ROOT}/pen_in_cup/random/seed-${SEED}/random_drop_$(printf '%02d' "${DROP_PERCENT}")_seed${SEED}.pkl"
-RUN_NAME="pen_in_cup_dp_random_drop_${DROP_PERCENT}_seed${SEED}"
+if [[ "${DROP_PERCENT}" == "0" ]]; then
+  RUN_NAME="pen_in_cup_dp_full_seed${SEED}"
+else
+  RUN_NAME="pen_in_cup_dp_random_drop_${DROP_PERCENT}_seed${SEED}"
+fi
 
 if [[ ! -f "${RLDS_PATH}/dataset_info.json" ]]; then
   echo "missing RLDS dataset_info.json under ${RLDS_PATH}" >&2
   echo "Run scripts/slurm/prepare_droid_pen_in_cup_rlds.sh first." >&2
   exit 1
 fi
-if [[ ! -f "${SCORE_PKL}" ]]; then
+if [[ "${DROP_PERCENT}" != "0" && ! -f "${SCORE_PKL}" ]]; then
   echo "missing score pkl: ${SCORE_PKL}" >&2
   echo "Run scripts/slurm/prepare_droid_pen_in_cup_rlds.sh first." >&2
   exit 1
