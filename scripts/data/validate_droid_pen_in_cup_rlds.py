@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from configs.bc.droid_pen_in_cup_dp_random_drop import DEFAULT_SCORE_ROOT, get_config
 from openx.data.dataloader import make_dataloader
