@@ -70,10 +70,60 @@ def _open_capture(mp4_dir: Path, serial: str) -> cv2.VideoCapture:
     return capture
 
 
-def _read_left_rgb(capture: cv2.VideoCapture, serial: str, step_idx: int) -> np.ndarray:
-    ok, frame = capture.read()
-    if not ok or frame is None:
-        raise ValueError(f"Could not read frame {step_idx} from camera {serial}")
+def _camera_timestamps(h5: h5py.File, serial: str) -> np.ndarray:
+    cameras = h5["observation"]["timestamp"]["cameras"]
+    for suffix in ("estimated_capture", "frame_received"):
+        key = f"{serial}_{suffix}"
+        if key in cameras:
+            return np.asarray(cameras[key][:], dtype=np.float64)
+    raise ValueError(f"Could not find camera timestamps for {serial}")
+
+
+def _aligned_frame_indices(capture: cv2.VideoCapture, target_timestamps: np.ndarray, serial: str) -> np.ndarray:
+    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    if frame_count <= 0:
+        raise ValueError(f"Could not determine frame count for camera {serial}")
+    if len(target_timestamps) == 0:
+        return np.asarray([], dtype=np.int64)
+    if len(target_timestamps) == frame_count:
+        return np.arange(frame_count, dtype=np.int64)
+    if target_timestamps[-1] <= target_timestamps[0]:
+        raise ValueError(f"Non-increasing timestamps for camera {serial}")
+
+    # DROID trajectory.h5 stores per-control-step camera timestamps, while the
+    # MP4 stores all camera frames. Approximate the full MP4 timestamp grid by
+    # spreading its frames over the first/last selected capture timestamps, then
+    # select the nearest MP4 frame for each trajectory step.
+    frame_timestamps = np.linspace(target_timestamps[0], target_timestamps[-1], frame_count)
+    right = np.searchsorted(frame_timestamps, target_timestamps, side="left")
+    right = np.clip(right, 1, frame_count - 1)
+    left = right - 1
+    choose_left = np.abs(target_timestamps - frame_timestamps[left]) <= np.abs(frame_timestamps[right] - target_timestamps)
+    indices = np.where(choose_left, left, right).astype(np.int64)
+    if np.any(np.diff(indices) < 0):
+        raise ValueError(f"Aligned frame indices are not monotonic for camera {serial}")
+    return indices
+
+
+def _read_selected_left_rgb(mp4_dir: Path, serial: str, indices: np.ndarray) -> list[np.ndarray]:
+    capture = _open_capture(mp4_dir, serial)
+    selected = set(int(index) for index in indices)
+    frames_by_index: dict[int, np.ndarray] = {}
+    try:
+        frame_idx = 0
+        while selected and frame_idx <= max(selected):
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise ValueError(f"Could not read frame {frame_idx} from camera {serial}")
+            if frame_idx in selected:
+                frames_by_index[frame_idx] = _left_rgb(frame)
+            frame_idx += 1
+    finally:
+        capture.release()
+    return [frames_by_index[int(index)] for index in indices]
+
+
+def _left_rgb(frame: np.ndarray) -> np.ndarray:
     left = frame[:, : frame.shape[1] // 2, :]
     resized = cv2.resize(left, (IMAGE_RES[1], IMAGE_RES[0]), interpolation=cv2.INTER_CUBIC)
     return cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -106,57 +156,70 @@ def _parse_episode(episode_dir: Path, ep_idx: int) -> tuple[str, dict[str, Any]]
         length = _trajectory_length(h5)
         wrist_serial, ext1_serial, ext2_serial = _camera_ids(h5, mp4_dir, metadata)
 
-        captures = {
-            "wrist": _open_capture(mp4_dir, wrist_serial),
-            "ext1": _open_capture(mp4_dir, ext1_serial),
-        }
+        wrist_capture = _open_capture(mp4_dir, wrist_serial)
+        ext1_capture = _open_capture(mp4_dir, ext1_serial)
+        try:
+            wrist_indices = _aligned_frame_indices(wrist_capture, _camera_timestamps(h5, wrist_serial), wrist_serial)
+            ext1_indices = _aligned_frame_indices(ext1_capture, _camera_timestamps(h5, ext1_serial), ext1_serial)
+        finally:
+            wrist_capture.release()
+            ext1_capture.release()
+
+        wrist_frames = _read_selected_left_rgb(mp4_dir, wrist_serial, wrist_indices)
+        ext1_frames = _read_selected_left_rgb(mp4_dir, ext1_serial, ext1_indices)
         if ext2_serial == ext1_serial:
-            captures["ext2"] = None
+            ext2_frames = ext1_frames
         else:
-            captures["ext2"] = _open_capture(mp4_dir, ext2_serial)
+            ext2_capture = _open_capture(mp4_dir, ext2_serial)
+            try:
+                ext2_indices = _aligned_frame_indices(ext2_capture, _camera_timestamps(h5, ext2_serial), ext2_serial)
+            finally:
+                ext2_capture.release()
+            ext2_frames = _read_selected_left_rgb(mp4_dir, ext2_serial, ext2_indices)
+
+        if not (len(wrist_frames) == len(ext1_frames) == len(ext2_frames) == length):
+            raise ValueError(
+                f"Aligned frame count mismatch in {episode_dir}: "
+                f"length={length}, wrist={len(wrist_frames)}, ext1={len(ext1_frames)}, ext2={len(ext2_frames)}"
+            )
 
         episode = []
-        try:
-            for i in range(length):
-                obs_robot = _read_step_group(h5["observation"]["robot_state"], i)
-                action = _read_step_group(h5["action"], i)
-                wrist_image = _read_left_rgb(captures["wrist"], wrist_serial, i)
-                ext1_image = _read_left_rgb(captures["ext1"], ext1_serial, i)
-                ext2_image = ext1_image.copy() if captures["ext2"] is None else _read_left_rgb(captures["ext2"], ext2_serial, i)
+        for i in range(length):
+            obs_robot = _read_step_group(h5["observation"]["robot_state"], i)
+            action = _read_step_group(h5["action"], i)
+            wrist_image = wrist_frames[i]
+            ext1_image = ext1_frames[i]
+            ext2_image = ext2_frames[i]
 
-                episode.append(
-                    {
-                        "observation": {
-                            "exterior_image_1_left": ext1_image,
-                            "exterior_image_2_left": ext2_image,
-                            "wrist_image_left": wrist_image,
-                            "cartesian_position": obs_robot["cartesian_position"],
-                            "joint_position": obs_robot["joint_positions"],
-                            "gripper_position": np.asarray([obs_robot["gripper_position"]], dtype=np.float64),
-                        },
-                        "action_dict": {
-                            "cartesian_position": action["cartesian_position"],
-                            "cartesian_velocity": action["cartesian_velocity"],
-                            "gripper_position": np.asarray([action["gripper_position"]], dtype=np.float64),
-                            "gripper_velocity": np.asarray([action["gripper_velocity"]], dtype=np.float64),
-                            "joint_position": action["joint_position"],
-                            "joint_velocity": action["joint_velocity"],
-                        },
-                        "action": np.concatenate(
-                            [action["cartesian_position"], np.asarray([action["gripper_position"]], dtype=np.float64)]
-                        ),
-                        "discount": np.float32(1.0),
-                        "reward": np.float32(i == length - 1 and bool(metadata.get("success", True))),
-                        "is_first": i == 0,
-                        "is_last": i == length - 1,
-                        "is_terminal": i == length - 1,
-                        "language_instruction": LANGUAGE_INSTRUCTION,
-                    }
-                )
-        finally:
-            for capture in captures.values():
-                if capture is not None:
-                    capture.release()
+            episode.append(
+                {
+                    "observation": {
+                        "exterior_image_1_left": ext1_image,
+                        "exterior_image_2_left": ext2_image,
+                        "wrist_image_left": wrist_image,
+                        "cartesian_position": obs_robot["cartesian_position"],
+                        "joint_position": obs_robot["joint_positions"],
+                        "gripper_position": np.asarray([obs_robot["gripper_position"]], dtype=np.float64),
+                    },
+                    "action_dict": {
+                        "cartesian_position": action["cartesian_position"],
+                        "cartesian_velocity": action["cartesian_velocity"],
+                        "gripper_position": np.asarray([action["gripper_position"]], dtype=np.float64),
+                        "gripper_velocity": np.asarray([action["gripper_velocity"]], dtype=np.float64),
+                        "joint_position": action["joint_position"],
+                        "joint_velocity": action["joint_velocity"],
+                    },
+                    "action": np.concatenate(
+                        [action["cartesian_position"], np.asarray([action["gripper_position"]], dtype=np.float64)]
+                    ),
+                    "discount": np.float32(1.0),
+                    "reward": np.float32(i == length - 1 and bool(metadata.get("success", True))),
+                    "is_first": i == 0,
+                    "is_last": i == length - 1,
+                    "is_terminal": i == length - 1,
+                    "language_instruction": LANGUAGE_INSTRUCTION,
+                }
+            )
 
     return (
         _episode_key(episode_dir, ep_idx),
