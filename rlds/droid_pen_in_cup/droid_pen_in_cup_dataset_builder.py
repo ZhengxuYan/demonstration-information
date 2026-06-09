@@ -143,6 +143,47 @@ def _trajectory_length(h5: h5py.File) -> int:
     return int(h5["action"]["cartesian_position"].shape[0])
 
 
+def _dataset_at(h5: h5py.File, path: str) -> h5py.Dataset | None:
+    node = h5
+    for part in path.split("/"):
+        if part not in node:
+            return None
+        node = node[part]
+    return node if isinstance(node, h5py.Dataset) else None
+
+
+def _valid_step_indices(h5: h5py.File, length: int) -> np.ndarray:
+    skip_dataset = _dataset_at(h5, "observation/timestamp/skip_action")
+    if skip_dataset is None:
+        skip_dataset = _dataset_at(h5, "observation/skip_action")
+    if skip_dataset is None:
+        skip_action = np.zeros(length, dtype=bool)
+    else:
+        skip_action = np.asarray(skip_dataset[:], dtype=bool)
+        if len(skip_action) != length:
+            raise ValueError(f"skip_action length {len(skip_action)} does not match trajectory length {length}")
+
+    movement_enabled = np.ones(length, dtype=bool)
+    for path in (
+        "observation/movement_enabled",
+        "observation/timestamp/movement_enabled",
+        "movement_enabled",
+    ):
+        movement_dataset = _dataset_at(h5, path)
+        if movement_dataset is None:
+            continue
+        values = np.asarray(movement_dataset[:], dtype=bool)
+        if values.ndim > 0 and len(values) == length:
+            movement_enabled = values
+            break
+
+    valid = movement_enabled & ~skip_action
+    indices = np.flatnonzero(valid)
+    if len(indices) == 0:
+        raise ValueError("No valid steps after movement_enabled & ~skip_action filtering")
+    return indices.astype(np.int64)
+
+
 def _episode_key(episode_dir: Path, ep_idx: int) -> str:
     return f"{ep_idx:05d}_{episode_dir.name}"
 
@@ -154,6 +195,7 @@ def _parse_episode(episode_dir: Path, ep_idx: int) -> tuple[str, dict[str, Any]]
 
     with h5py.File(h5_path, "r") as h5:
         length = _trajectory_length(h5)
+        valid_indices = _valid_step_indices(h5, length)
         wrist_serial, ext1_serial, ext2_serial = _camera_ids(h5, mp4_dir, metadata)
 
         wrist_capture = _open_capture(mp4_dir, wrist_serial)
@@ -184,7 +226,8 @@ def _parse_episode(episode_dir: Path, ep_idx: int) -> tuple[str, dict[str, Any]]
             )
 
         episode = []
-        for i in range(length):
+        final_valid_index = int(valid_indices[-1])
+        for output_i, i in enumerate(valid_indices.tolist()):
             obs_robot = _read_step_group(h5["observation"]["robot_state"], i)
             action = _read_step_group(h5["action"], i)
             wrist_image = wrist_frames[i]
@@ -213,10 +256,10 @@ def _parse_episode(episode_dir: Path, ep_idx: int) -> tuple[str, dict[str, Any]]
                         [action["cartesian_position"], np.asarray([action["gripper_position"]], dtype=np.float64)]
                     ),
                     "discount": np.float32(1.0),
-                    "reward": np.float32(i == length - 1 and bool(metadata.get("success", True))),
-                    "is_first": i == 0,
-                    "is_last": i == length - 1,
-                    "is_terminal": i == length - 1,
+                    "reward": np.float32(i == final_valid_index and bool(metadata.get("success", True))),
+                    "is_first": output_i == 0,
+                    "is_last": i == final_valid_index,
+                    "is_terminal": i == final_valid_index,
                     "language_instruction": LANGUAGE_INSTRUCTION,
                 }
             )
