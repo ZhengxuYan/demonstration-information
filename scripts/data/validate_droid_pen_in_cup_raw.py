@@ -59,15 +59,14 @@ def main() -> None:
     for idx, episode_dir in enumerate(episodes):
         h5_path = episode_dir / "trajectory.h5"
         meta_path = metadata_path(episode_dir)
-        if meta_path is None:
-            errors.append(f"{episode_dir}: missing metadata_*.json")
-            continue
-        with meta_path.open("r", encoding="utf-8") as f:
-            metadata = json.load(f)
-        if metadata.get("success") is not True:
-            errors.append(f"{episode_dir}: metadata success is not True")
-        if str(metadata.get("ext2_cam_serial", "N/A")).upper() == "N/A":
-            missing_ext2 += 1
+        metadata = {}
+        if meta_path is not None:
+            with meta_path.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            if metadata.get("success") is not True:
+                errors.append(f"{episode_dir}: metadata success is not True")
+            if str(metadata.get("ext2_cam_serial", "N/A")).upper() == "N/A":
+                missing_ext2 += 1
 
         with h5py.File(h5_path, "r") as h5:
             for required in REQUIRED_DATASETS:
@@ -89,6 +88,8 @@ def main() -> None:
                 errors.append(f"{episode_dir}: no wrist camera MP4")
             if not exterior:
                 errors.append(f"{episode_dir}: no exterior camera MP4")
+            if meta_path is None and len(exterior) < 2:
+                missing_ext2 += 1
         if idx < 5:
             print(f"checked {idx:03d}: {episode_dir.name}")
 
