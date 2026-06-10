@@ -23,7 +23,11 @@ from openx.utils.spec import ModuleSpec
 
 
 def get_config(config_str="pen_in_cup,sa,1"):
-    ds, config_type, seed = config_str.split(",")
+    parts = config_str.split(",")
+    if len(parts) not in (3, 4):
+        raise ValueError(f"Expected config_str ds,type,seed[,dataset_path], got {config_str!r}")
+    ds, config_type, seed = parts[:3]
+    dataset_path = parts[3] if len(parts) == 4 else "path/to/droid/{ds}/1.0.0".format(ds=ds)
     seed = int(seed)
     assert config_type in {"s", "a", "sa"}
     encoder_keys = {
@@ -99,7 +103,7 @@ def get_config(config_str="pen_in_cup,sa,1"):
     dataloader = dict(
         datasets={
             ds.replace("/", "_"): dict(
-                path="path/to/droid/{ds}/1.0.0".format(ds=ds),
+                path=dataset_path,
                 train_split="train",
                 transform=ModuleSpec.create(droid_dataset_transform),
             ),
