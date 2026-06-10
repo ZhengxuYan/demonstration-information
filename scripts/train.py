@@ -31,6 +31,7 @@ flags.DEFINE_string("name", "train", "Name of the experiment")
 flags.DEFINE_string("project", "openx", "WandB project to save logs to.")
 flags.DEFINE_bool("include_timestamp", True, "Include timestamp in the experiment name.")
 flags.DEFINE_bool("debug", False, "Whether or not to enable debug mode.")
+flags.DEFINE_bool("resume", False, "Resume training from the latest full-state checkpoint in the run directory.")
 # Always lock the config to avoid subtle bugs
 config_flags.DEFINE_config_file(
     "config", None, "File path to the training hyperparameter configuration.", lock_config=True
@@ -59,7 +60,6 @@ def main(_):
     tf.config.set_visible_devices([], "GPU")
 
     # Make sure each process loads different data.
-    # TODO(jhejna) If we have a resume ID, make sure that we restore the final step.
     tf.random.set_seed(FLAGS.config.seed + jax.process_index())
     np.random.seed(FLAGS.config.seed + jax.process_index())
     rng = jax.random.key(FLAGS.config.seed)
@@ -207,6 +207,25 @@ def main(_):
         )
         weights_checkpointer = orbax.checkpoint.CheckpointManager(save_path, orbax.checkpoint.PyTreeCheckpointer())
 
+    start_step = 0
+    if FLAGS.resume:
+        if FLAGS.debug:
+            raise ValueError("--resume is not supported with --debug because debug runs do not save checkpoints.")
+        latest_step = state_checkpointer.latest_step()
+        if latest_step is None:
+            if jax.process_index() == 0:
+                print(f"--resume was set, but no state checkpoint was found under {save_path}/state. Starting fresh.")
+        else:
+            restore_kwargs = {
+                "restore_args": orbax.checkpoint.checkpoint_utils.construct_restore_args(
+                    state, jax.tree.map(lambda _: rep_sharding, state)
+                )
+            }
+            state = state_checkpointer.restore(latest_step, state, restore_kwargs=restore_kwargs)
+            start_step = int(latest_step)
+            if jax.process_index() == 0:
+                print(f"Resumed train state from {save_path}/state at step {start_step}.")
+
     ### Worker Saves Statistics, Configs, ExBatch ###
     if jax.process_index() == 0 and not FLAGS.debug:
         # Save the example batch
@@ -248,7 +267,15 @@ def main(_):
 
     # Training constants
     train_metrics = defaultdict(list)
-    for i in tqdm.tqdm(range(FLAGS.config.steps), total=FLAGS.config.steps, dynamic_ncols=True):
+    for skipped_i in range(start_step):
+        rng = jax.random.fold_in(rng, skipped_i)
+
+    for i in tqdm.tqdm(
+        range(start_step, FLAGS.config.steps),
+        initial=start_step,
+        total=FLAGS.config.steps,
+        dynamic_ncols=True,
+    ):
         rng = jax.random.fold_in(rng, i)
 
         with timer("dataset"):

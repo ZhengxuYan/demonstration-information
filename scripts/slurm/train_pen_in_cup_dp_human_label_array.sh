@@ -43,6 +43,7 @@ ESTIMATORS="${ESTIMATORS:-observability optimality}"
 DROP_PERCENTS="${DROP_PERCENTS:-25 50 75}"
 SEED="${SEED:-1}"
 PROJECT="${WANDB_PROJECT:-deminf-dp-pen-in-cup}"
+RESUME="${RESUME:-0}"
 
 read -r -a ESTIMATOR_ARRAY <<< "${ESTIMATORS}"
 read -r -a DROP_ARRAY <<< "${DROP_PERCENTS}"
@@ -82,10 +83,17 @@ echo "score_root=${SCORE_ROOT}"
 echo "score_pkl=${SCORE_PKL}"
 echo "out_root=${OUT_ROOT}"
 echo "run_name=${RUN_NAME}"
+echo "resume=${RESUME}"
+
+TRAIN_ARGS=()
+if [[ "${RESUME}" == "1" || "${RESUME}" == "true" || "${RESUME}" == "TRUE" ]]; then
+  TRAIN_ARGS+=(--resume)
+fi
 
 python scripts/train.py \
   --config="configs/bc/droid_pen_in_cup_dp_random_drop.py:pen_in_cup,${DROP_PERCENT},${ESTIMATOR},${SEED},${SCORE_ROOT},${RLDS_PATH}" \
   --path="${OUT_ROOT}" \
   --name="${RUN_NAME}" \
   --project="${PROJECT}" \
-  --include_timestamp=false
+  --include_timestamp=false \
+  "${TRAIN_ARGS[@]}"
