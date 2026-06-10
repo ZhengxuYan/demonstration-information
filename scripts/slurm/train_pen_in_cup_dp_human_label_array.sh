@@ -20,7 +20,7 @@
 #SBATCH --mem=128GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=pic_dp_hlabel
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8,iliad4
 #SBATCH --output=/iris/u/jasonyan/slurm/%A_%a_pic_dp_hlabel.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%A_%a_pic_dp_hlabel.err
 
