@@ -45,6 +45,12 @@ IMAGE_KEY_TO_HDF5_DATASET = {
     "wrist": "robot0_eye_in_hand_image",
     "agent": "agentview_image",
 }
+TRANSPORT_IMAGE_KEY_TO_HDF5_DATASET = {
+    "agent": "shouldercamera0_image",
+    "wrist": "shouldercamera1_image",
+}
+TRANSPORT_STATE_SIZE = 87
+TRANSPORT_ACTION_SIZE = 14
 
 
 def _l2_dists(z):
@@ -167,6 +173,14 @@ def parse_args():
             "action-latent L2 distance is larger than observation-latent L2 distance."
         ),
     )
+    parser.add_argument(
+        "--transport",
+        action="store_true",
+        help=(
+            "Score bimanual transport datasets: read shouldercamera0/1 as agent/wrist, "
+            "use both robots' state, and keep the full 14D action."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -268,6 +282,37 @@ def gather_time(x: np.ndarray, idx: np.ndarray) -> np.ndarray:
     return x[idx]
 
 
+def _read_or_zeros(group: h5py.Group, key: str, shape: tuple[int, ...]) -> np.ndarray:
+    if key in group:
+        return group[key][:].astype(np.float32)
+    return np.zeros(shape, dtype=np.float32)
+
+
+def _transport_state(obs_grp: h5py.Group, demo_length: int) -> np.ndarray:
+    parts = []
+    for robot in (0, 1):
+        gripper_width = int(obs_grp[f"robot{robot}_gripper_qpos"].shape[-1]) if f"robot{robot}_gripper_qpos" in obs_grp else 2
+        joint_width = int(obs_grp[f"robot{robot}_joint_pos"].shape[-1]) if f"robot{robot}_joint_pos" in obs_grp else 7
+        parts.extend(
+            [
+                _read_or_zeros(obs_grp, f"robot{robot}_eef_pos", (demo_length, 3)),
+                _read_or_zeros(obs_grp, f"robot{robot}_eef_quat", (demo_length, 4)),
+                _read_or_zeros(obs_grp, f"robot{robot}_gripper_qpos", (demo_length, gripper_width)),
+                _read_or_zeros(obs_grp, f"robot{robot}_joint_pos", (demo_length, joint_width)),
+                _read_or_zeros(obs_grp, f"robot{robot}_joint_vel", (demo_length, joint_width)),
+            ]
+        )
+    parts.append(_read_or_zeros(obs_grp, "object", (demo_length, 41)))
+    state = np.concatenate(parts, axis=-1).astype(np.float32)
+    if state.shape[-1] != TRANSPORT_STATE_SIZE:
+        raise ValueError(f"Expected transport state dim {TRANSPORT_STATE_SIZE}, got {state.shape[-1]}")
+    return state
+
+
+def _image_dataset_map(transport: bool) -> Dict[str, str]:
+    return TRANSPORT_IMAGE_KEY_TO_HDF5_DATASET if transport else IMAGE_KEY_TO_HDF5_DATASET
+
+
 def chunk_episode(
     observation: Dict,
     action: np.ndarray,
@@ -318,8 +363,10 @@ def load_hdf5_dataset(
     action_structure: Dict,
     stats: Dict,
     image_keys: list[str],
+    transport: bool = False,
 ):
     episodes = []
+    image_dataset_map = _image_dataset_map(transport)
     with h5py.File(spec.path, "r") as f:
         demos = sorted(f["data"].keys(), key=lambda x: int(x.split("_")[-1]))
         for demo in demos:
@@ -331,45 +378,68 @@ def load_hdf5_dataset(
                 )
             obs_grp = grp["obs"]
             for key in image_keys:
-                hdf5_image_dataset = IMAGE_KEY_TO_HDF5_DATASET[key]
+                hdf5_image_dataset = image_dataset_map[key]
                 if hdf5_image_dataset not in obs_grp:
                     raise KeyError(
                         f"{spec.path}:{demo}/obs is missing '{hdf5_image_dataset}'. "
                         f"Available observation keys: {sorted(obs_grp.keys())}"
                     )
-            raw_obs = {
-                "state": {
-                    "EE_POS": obs_grp["robot0_eef_pos"][:].astype(np.float32),
-                    "EE_QUAT": obs_grp["robot0_eef_quat"][:].astype(np.float32),
-                    "GRIPPER": obs_grp["robot0_gripper_qpos"][:, :1].astype(np.float32),
-                },
-                "image": {
-                    key: obs_grp[IMAGE_KEY_TO_HDF5_DATASET[key]][:].astype(np.float32) / 255.0
-                    for key in image_keys
-                },
-            }
-            raw_action = {
-                "desired_delta": {
-                    "EE_POS": grp["actions"][:, :3].astype(np.float32),
-                    "EE_EULER": grp["actions"][:, 3:6].astype(np.float32),
-                },
-                "desired_absolute": {
-                    "GRIPPER": grp["actions"][:, -1:].astype(np.float32),
-                },
-            }
+            if transport:
+                action = grp["actions"][:].astype(np.float32)
+                if action.shape[-1] != TRANSPORT_ACTION_SIZE:
+                    raise ValueError(
+                        f"{spec.path}:{demo} expected transport action dim {TRANSPORT_ACTION_SIZE}, "
+                        f"got {action.shape[-1]}"
+                    )
+                raw_obs = {
+                    "state": {
+                        "MISC": _transport_state(obs_grp, action.shape[0]),
+                    },
+                    "image": {
+                        key: obs_grp[image_dataset_map[key]][:].astype(np.float32) / 255.0 for key in image_keys
+                    },
+                }
+                raw_action = {
+                    "desired_delta": {
+                        "MISC": action,
+                    },
+                }
+            else:
+                raw_obs = {
+                    "state": {
+                        "EE_POS": obs_grp["robot0_eef_pos"][:].astype(np.float32),
+                        "EE_QUAT": obs_grp["robot0_eef_quat"][:].astype(np.float32),
+                        "GRIPPER": obs_grp["robot0_gripper_qpos"][:, :1].astype(np.float32),
+                    },
+                    "image": {
+                        key: obs_grp[image_dataset_map[key]][:].astype(np.float32) / 255.0 for key in image_keys
+                    },
+                }
+                raw_action = {
+                    "desired_delta": {
+                        "EE_POS": grp["actions"][:, :3].astype(np.float32),
+                        "EE_EULER": grp["actions"][:, 3:6].astype(np.float32),
+                    },
+                    "desired_absolute": {
+                        "GRIPPER": grp["actions"][:, -1:].astype(np.float32),
+                    },
+                }
 
-            normalized_obs = {
-                "state": normalize_tree(raw_obs["state"], obs_structure["state"], stats_subtree(stats, "state")),
-                "image": raw_obs["image"],
-            }
-            normalized_action = normalize_tree(raw_action, action_structure, stats_subtree(stats, "action"))
-
+            if "state" not in obs_structure:
+                normalized_state = np.zeros((grp["actions"].shape[0], 0), dtype=np.float32)
+            else:
+                normalized_state = concatenate_ordered(
+                    normalize_tree(raw_obs["state"], obs_structure["state"], stats_subtree(stats, "state"))
+                )
+            normalized_action = concatenate_ordered(
+                normalize_tree(raw_action, action_structure, stats_subtree(stats, "action"))
+            )
             ep = chunk_episode(
                 observation={
-                    "state": concatenate_ordered(normalized_obs["state"]),
-                    "image": normalized_obs["image"],
+                    "state": normalized_state,
+                    "image": raw_obs["image"],
                 },
-                action=concatenate_ordered(normalized_action),
+                action=normalized_action,
                 ep_idx=int(demo.split("_")[-1]),
                 quality_score=spec.label,
                 dataset_id=dataset_id,
@@ -613,6 +683,7 @@ def main():
             action_structure=action_structure,
             stats=dataset_statistics,
             image_keys=image_keys,
+            transport=args.transport,
         )
 
         stats_list = []
