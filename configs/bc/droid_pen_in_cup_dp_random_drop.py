@@ -41,15 +41,13 @@ def get_config(config_str="pen_in_cup,25,random,1"):
             "seed-" + str(seed),
             f"random_drop_{int(drop_percent):02d}_seed{seed}.pkl",
         )
-    elif estimator in ("observability", "optimality"):
+    else:
         filter_path = os.path.join(
             score_root,
             env.replace("/", "_"),
             estimator,
             f"{estimator}_scores.pkl",
         )
-    else:
-        raise ValueError(f"Unsupported estimator={estimator!r}; expected random, observability, or optimality")
 
     structure = {
         "observation": {
