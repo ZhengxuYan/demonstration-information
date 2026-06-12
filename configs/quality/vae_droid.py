@@ -9,6 +9,8 @@ python scripts/train.py \
     --name state
 """
 
+import os
+
 import optax
 import tensorflow as tf
 from ml_collections import ConfigDict
@@ -112,7 +114,7 @@ def get_config(config_str="pen_in_cup,sa,1"):
         n_action=4,
         augment_kwargs=dict(scale_range=(0.9, 0.95), aspect_ratio_range=(1.33, 1.333)),  # Squish a little bit.
         shuffle_size=100000,
-        batch_size=256,
+        batch_size=int(os.environ.get("VAE_BATCH_SIZE", 256)),
         recompute_statistics=False,
         cache=True,  # Small enough to stay in memory
         prefetch=tf.data.AUTOTUNE,  # Enable prefetch.
