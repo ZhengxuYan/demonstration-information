@@ -76,7 +76,7 @@ def run_name(args: argparse.Namespace, task: Task) -> str:
     return f"{args.task_prefix}_{task.dataset}_{middle}_{task.algo}_action_prior_seed1"
 
 
-def checkpoint_for_run(run_dir: Path) -> Path:
+def best_checkpoint_for_run(run_dir: Path) -> Path:
     ckpts = list(run_dir.glob("*/models/*best_validation*.pth"))
     if not ckpts:
         raise FileNotFoundError(f"No best-validation checkpoint under {run_dir}")
@@ -89,6 +89,25 @@ def checkpoint_for_run(run_dir: Path) -> Path:
         return loss, -epoch
 
     return min(ckpts, key=key)
+
+
+def last_checkpoint_for_run(run_dir: Path) -> Path:
+    time_dirs = [path for path in run_dir.iterdir() if path.is_dir()]
+    if not time_dirs:
+        raise FileNotFoundError(f"No timestamped run directory under {run_dir}")
+    latest_time_dir = sorted(time_dirs)[-1]
+    last = latest_time_dir / "last.pth"
+    if last.is_file():
+        return last
+    ckpts = list((latest_time_dir / "models").glob("model_epoch_*.pth"))
+    if not ckpts:
+        raise FileNotFoundError(f"No last or epoch checkpoint under {latest_time_dir}")
+
+    def epoch(path: Path) -> int:
+        match = re.search(r"epoch_(\d+)", path.name)
+        return int(match.group(1)) if match else -1
+
+    return max(ckpts, key=epoch)
 
 
 def load_tasks(state_file: Path) -> list[Task]:
@@ -157,13 +176,22 @@ def js_distance(a: np.ndarray, b: np.ndarray, bins: np.ndarray) -> float:
     return float(0.5 * np.sum(pa * np.log(pa / m)) + 0.5 * np.sum(pb * np.log(pb / m)))
 
 
-def plot_task(task: Task, train_actions: np.ndarray, eval_actions: np.ndarray, model_samples: np.ndarray, output: Path, bins_count: int) -> list[dict[str, object]]:
+def plot_task(
+    task: Task,
+    train_actions: np.ndarray,
+    eval_actions: np.ndarray,
+    best_samples: np.ndarray,
+    last_samples: np.ndarray,
+    output: Path,
+    bins_count: int,
+) -> list[dict[str, object]]:
     rows = []
     fig, axes = plt.subplots(7, 1, figsize=(13, 17), sharex=False)
     fig.suptitle(f"{task.dataset} {task.regime} {task.algo} action_prior: empirical actions vs model samples", fontsize=16)
     for dim, ax in enumerate(axes):
-        lo = float(np.percentile(np.concatenate([train_actions[:, dim], eval_actions[:, dim], model_samples[:, dim]]), 0.2))
-        hi = float(np.percentile(np.concatenate([train_actions[:, dim], eval_actions[:, dim], model_samples[:, dim]]), 99.8))
+        combined = np.concatenate([train_actions[:, dim], eval_actions[:, dim], best_samples[:, dim], last_samples[:, dim]])
+        lo = float(np.percentile(combined, 0.2))
+        hi = float(np.percentile(combined, 99.8))
         if lo == hi:
             lo -= 1.0
             hi += 1.0
@@ -171,7 +199,8 @@ def plot_task(task: Task, train_actions: np.ndarray, eval_actions: np.ndarray, m
         ax.hist(train_actions[:, dim], bins=bins, density=True, alpha=0.35, label=f"train {task.train_filter}", color="#4C78A8")
         eval_label = task.score_filter or task.valid_filter
         ax.hist(eval_actions[:, dim], bins=bins, density=True, alpha=0.35, label=f"heldout {eval_label}", color="#F58518")
-        ax.hist(model_samples[:, dim], bins=bins, density=True, histtype="step", linewidth=2.0, label="model samples", color="#54A24B")
+        ax.hist(best_samples[:, dim], bins=bins, density=True, histtype="step", linewidth=2.0, label="best-val samples", color="#54A24B")
+        ax.hist(last_samples[:, dim], bins=bins, density=True, histtype="step", linewidth=2.0, label="last samples", color="#B279A2")
         ax.set_title(f"dim {dim}: {DIM_NAMES[dim]}")
         ax.grid(alpha=0.2)
         ax.legend(loc="upper right")
@@ -184,12 +213,16 @@ def plot_task(task: Task, train_actions: np.ndarray, eval_actions: np.ndarray, m
                 "name": DIM_NAMES[dim],
                 "train_mean": float(train_actions[:, dim].mean()),
                 "heldout_mean": float(eval_actions[:, dim].mean()),
-                "model_mean": float(model_samples[:, dim].mean()),
+                "best_mean": float(best_samples[:, dim].mean()),
+                "last_mean": float(last_samples[:, dim].mean()),
                 "train_std": float(train_actions[:, dim].std()),
                 "heldout_std": float(eval_actions[:, dim].std()),
-                "model_std": float(model_samples[:, dim].std()),
-                "js_model_vs_train": js_distance(model_samples[:, dim], train_actions[:, dim], bins),
-                "js_model_vs_heldout": js_distance(model_samples[:, dim], eval_actions[:, dim], bins),
+                "best_std": float(best_samples[:, dim].std()),
+                "last_std": float(last_samples[:, dim].std()),
+                "js_best_vs_train": js_distance(best_samples[:, dim], train_actions[:, dim], bins),
+                "js_best_vs_heldout": js_distance(best_samples[:, dim], eval_actions[:, dim], bins),
+                "js_last_vs_train": js_distance(last_samples[:, dim], train_actions[:, dim], bins),
+                "js_last_vs_heldout": js_distance(last_samples[:, dim], eval_actions[:, dim], bins),
             }
         )
     fig.tight_layout(rect=[0, 0, 1, 0.98])
@@ -207,17 +240,17 @@ def write_index(output_dir: Path, image_names: list[str], rows: list[dict[str, o
         "<!doctype html><html><head><meta charset='utf-8'><title>Action Prior Fit Report</title>",
         "<style>body{font-family:Arial,sans-serif;margin:28px;color:#17201a}img{max-width:100%;border:1px solid #ddd}table{border-collapse:collapse;margin:16px 0 32px;width:100%}td,th{border-bottom:1px solid #ddd;padding:6px 8px;text-align:right}td:first-child,th:first-child{text-align:left}h2{margin-top:36px}</style>",
         "</head><body><h1>Action Prior Fit Report</h1>",
-        "<p>Histograms compare empirical train actions, heldout/score actions, and samples from the best-validation action_prior density checkpoint. Lower JS means closer marginal fit.</p>",
+        "<p>Histograms compare empirical train actions, heldout/score actions, samples from the best-validation checkpoint, and samples from the last checkpoint. Lower JS means closer marginal fit.</p>",
     ]
     for name in image_names:
         stem = Path(name).stem
         parts.append(f"<h2>{stem}</h2><img src='{name}'>")
     parts.append("<h2>Per-dimension JS Summary</h2>")
     for key, task_rows in by_task.items():
-        parts.append(f"<h3>{key[0]} {key[1]} {key[2]}</h3><table><tr><th>dim</th><th>name</th><th>JS model/train</th><th>JS model/heldout</th><th>train mean</th><th>model mean</th><th>train std</th><th>model std</th></tr>")
+        parts.append(f"<h3>{key[0]} {key[1]} {key[2]}</h3><table><tr><th>dim</th><th>name</th><th>JS best/train</th><th>JS best/heldout</th><th>JS last/train</th><th>JS last/heldout</th><th>train mean</th><th>best mean</th><th>last mean</th><th>train std</th><th>best std</th><th>last std</th></tr>")
         for row in task_rows:
             parts.append(
-                "<tr><td>{dim}</td><td>{name}</td><td>{js_model_vs_train:.4f}</td><td>{js_model_vs_heldout:.4f}</td><td>{train_mean:.4f}</td><td>{model_mean:.4f}</td><td>{train_std:.4f}</td><td>{model_std:.4f}</td></tr>".format(**row)
+                "<tr><td>{dim}</td><td>{name}</td><td>{js_best_vs_train:.4f}</td><td>{js_best_vs_heldout:.4f}</td><td>{js_last_vs_train:.4f}</td><td>{js_last_vs_heldout:.4f}</td><td>{train_mean:.4f}</td><td>{best_mean:.4f}</td><td>{last_mean:.4f}</td><td>{train_std:.4f}</td><td>{best_std:.4f}</td><td>{last_std:.4f}</td></tr>".format(**row)
             )
         parts.append("</table>")
     parts.append("</body></html>")
@@ -233,14 +266,16 @@ def main() -> None:
     for task in tasks:
         data_path = dataset_path(args, task.dataset)
         run_dir = args.out_root / run_name(args, task)
-        ckpt = checkpoint_for_run(run_dir)
+        best_ckpt = best_checkpoint_for_run(run_dir)
+        last_ckpt = last_checkpoint_for_run(run_dir)
         heldout_filter = task.score_filter or task.valid_filter
-        print(f"{task.dataset} {task.regime} {task.algo}: checkpoint={ckpt} heldout={heldout_filter}", flush=True)
+        print(f"{task.dataset} {task.regime} {task.algo}: best={best_ckpt} last={last_ckpt} heldout={heldout_filter}", flush=True)
         train_actions = read_actions(data_path, task.train_filter, args.max_samples)
         heldout_actions = read_actions(data_path, heldout_filter, args.max_samples)
-        model_samples, _ = sample_model(ckpt, data_path, task.train_filter, args.max_samples, args.batch_size, args.device)
+        best_samples, _ = sample_model(best_ckpt, data_path, task.train_filter, args.max_samples, args.batch_size, args.device)
+        last_samples, _ = sample_model(last_ckpt, data_path, task.train_filter, args.max_samples, args.batch_size, args.device)
         image_name = f"{task.dataset}_{task.regime}_{task.algo}_action_prior_fit.png"
-        rows = plot_task(task, train_actions, heldout_actions, model_samples, args.output_dir / image_name, args.bins)
+        rows = plot_task(task, train_actions, heldout_actions, best_samples, last_samples, args.output_dir / image_name, args.bins)
         image_names.append(image_name)
         all_rows.extend(rows)
     with (args.output_dir / "summary.csv").open("w", newline="") as f:
