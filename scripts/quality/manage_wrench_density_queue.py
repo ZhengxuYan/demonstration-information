@@ -286,6 +286,14 @@ def train_done_marker(args: argparse.Namespace, task: Task) -> bool:
     return (run_dir / "TRAIN_DONE").is_file()
 
 
+def train_done(args: argparse.Namespace, task: Task, state: str | None = None) -> bool:
+    if train_done_marker(args, task):
+        return True
+    if state is None:
+        state = job_state(task.train_job_id) if task.train_job_id else None
+    return state in TERMINAL_OK and checkpoint_done(args, task)
+
+
 def score_output(args: argparse.Namespace, task: Task) -> Path:
     recipe = f"{task.dataset}/{args.action_target}_{args.action_source}_{args.action_normalization}"
     if task.fold_tag:
@@ -294,7 +302,7 @@ def score_output(args: argparse.Namespace, task: Task) -> Path:
 
 
 def score_done(args: argparse.Namespace, task: Task) -> bool:
-    return score_output(args, task).is_file()
+    return train_done(args, task) and score_output(args, task).is_file()
 
 
 def normal_group_score_done(args: argparse.Namespace, dataset: str, algo: str) -> bool:
@@ -529,8 +537,7 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
         if live_score and (not task.score_job_id or task.score_state not in LIVE):
             task.score_job_id, task.score_state = live_score
         train_state = job_state(task.train_job_id) if task.train_job_id else None
-        has_checkpoint = checkpoint_done(args, task)
-        if train_done_marker(args, task) or (train_state in TERMINAL_OK and has_checkpoint):
+        if train_done(args, task, train_state):
             task.train_state = "COMPLETED"
         elif train_state:
             task.train_state = train_state
