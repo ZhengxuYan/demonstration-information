@@ -9,7 +9,7 @@
 #SBATCH --mem=96GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=wth_density
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8,iliad1,iliad2,iliad3,iliad4
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8,iliad1,iliad2,iliad3,iliad4,iliad-hgx-1,iliad-hgx-2
 #SBATCH --output=/iris/u/jasonyan/slurm/%j_wth_density.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%j_wth_density.err
 
