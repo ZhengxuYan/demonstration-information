@@ -24,6 +24,7 @@ DATASET_TAG="${DATASET_TAG:?Set DATASET_TAG, e.g. 0610_89 or 0612_100}"
 RLDS_PATH="${RLDS_PATH:?Set RLDS_PATH to droid_pen_in_cup/.../1.0.0}"
 TASK_TAG="${TASK_TAG:-pen_in_cup}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/${TASK_TAG}_density_datasets}"
+ACTION_SOURCE="${ACTION_SOURCE:-action}"
 ACTION_TARGET="${ACTION_TARGET:-single}"
 CHUNK_SIZE="${CHUNK_SIZE:-4}"
 ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
@@ -32,7 +33,7 @@ ACTION_BOUND_HIGH_PERCENTILE="${ACTION_BOUND_HIGH_PERCENTILE:-99}"
 VALID_RATIO="${VALID_RATIO:-0.1}"
 SEED="${SEED:-1}"
 ENV_NAME="${ENV_NAME:-${TASK_TAG}_density}"
-OUTPUT="${OUTPUT:-${OUT_ROOT}/${TASK_TAG}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_NORMALIZATION}.hdf5}"
+OUTPUT="${OUTPUT:-${OUT_ROOT}/${TASK_TAG}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}.hdf5}"
 
 set +u
 source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
@@ -46,6 +47,7 @@ echo "hostname=$(hostname)"
 echo "rlds_path=${RLDS_PATH}"
 echo "output=${OUTPUT}"
 echo "task_tag=${TASK_TAG}"
+echo "action_source=${ACTION_SOURCE}"
 echo "action_target=${ACTION_TARGET}"
 echo "action_normalization=${ACTION_NORMALIZATION}"
 echo "action_bound_low_percentile=${ACTION_BOUND_LOW_PERCENTILE}"
@@ -54,6 +56,7 @@ echo "action_bound_high_percentile=${ACTION_BOUND_HIGH_PERCENTILE}"
 python scripts/quality/export_droid_rlds_to_robomimic_density_hdf5.py \
   --rlds-path "${RLDS_PATH}" \
   --output "${OUTPUT}" \
+  --action-source "${ACTION_SOURCE}" \
   --action-target "${ACTION_TARGET}" \
   --chunk-size "${CHUNK_SIZE}" \
   --action-normalization "${ACTION_NORMALIZATION}" \

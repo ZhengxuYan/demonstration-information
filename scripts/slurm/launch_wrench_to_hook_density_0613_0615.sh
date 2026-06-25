@@ -14,8 +14,9 @@ set -euo pipefail
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 TASK_TAG="${TASK_TAG:-wrench_to_hook}"
 RUN_PREFIX="${RUN_PREFIX:-wrench_to_hook}"
+ACTION_SOURCE="${ACTION_SOURCE:-cartesian_velocity}"
 ACTION_TARGET="${ACTION_TARGET:-single}"
-ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-bounded_minmax}"
+ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
 ACTION_BOUND_LOW_PERCENTILE="${ACTION_BOUND_LOW_PERCENTILE:-1}"
 ACTION_BOUND_HIGH_PERCENTILE="${ACTION_BOUND_HIGH_PERCENTILE:-99}"
 DATA_ROOT="${DATA_ROOT:-/iris/u/jasonyan/data}"
@@ -30,7 +31,7 @@ WRENCH0615_RLDS="${WRENCH0615_RLDS:-${DATA_ROOT}/droid_wrench_on_hook_06152026_9
 submit_one_dataset() {
   local dataset_tag="$1"
   local rlds_path="$2"
-  local hdf5_path="${DATASET_ROOT}/${TASK_TAG}_${dataset_tag}_${ACTION_TARGET}_${ACTION_NORMALIZATION}.hdf5"
+  local hdf5_path="${DATASET_ROOT}/${TASK_TAG}_${dataset_tag}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}.hdf5"
 
   if [[ ! -d "${rlds_path}" ]]; then
     echo "Missing RLDS path for ${dataset_tag}: ${rlds_path}" >&2
@@ -45,6 +46,7 @@ submit_one_dataset() {
     RLDS_PATH="${rlds_path}" \
     OUT_ROOT="${DATASET_ROOT}" \
     OUTPUT="${hdf5_path}" \
+    ACTION_SOURCE="${ACTION_SOURCE}" \
     ACTION_TARGET="${ACTION_TARGET}" \
     ACTION_NORMALIZATION="${ACTION_NORMALIZATION}" \
     ACTION_BOUND_LOW_PERCENTILE="${ACTION_BOUND_LOW_PERCENTILE}" \
@@ -61,6 +63,7 @@ submit_one_dataset() {
     DATASET_HDF5="${hdf5_path}" \
     OUT_ROOT="${OUT_ROOT}" \
     CONFIG_ROOT="${CONFIG_ROOT}" \
+    ACTION_SOURCE="${ACTION_SOURCE}" \
     ACTION_TARGET="${ACTION_TARGET}" \
     ACTION_NORMALIZATION="${ACTION_NORMALIZATION}" \
     WANDB_PROJECT="wrench-to-hook-density" \

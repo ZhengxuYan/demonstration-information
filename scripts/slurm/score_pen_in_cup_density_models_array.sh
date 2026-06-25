@@ -26,6 +26,7 @@ TASK_TAG="${TASK_TAG:-pen_in_cup}"
 RUN_PREFIX="${RUN_PREFIX:-${TASK_TAG}}"
 OUT_ROOT="${OUT_ROOT:-/iris/u/jasonyan/data/robomimic_outputs/${TASK_TAG}_density}"
 SCORE_ROOT="${SCORE_ROOT:-/iris/u/jasonyan/data/${TASK_TAG}_density_scores}"
+ACTION_SOURCE="${ACTION_SOURCE:-action}"
 ACTION_TARGET="${ACTION_TARGET:-single}"
 ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
 ALGOS_CSV="${ALGOS:-gaussian,gmm,discrete}"
@@ -50,9 +51,9 @@ COND_INDEX=$((ZERO % ${#CONDITIONS_ARR[@]}))
 ALGO="${ALGOS_ARR[$ALGO_INDEX]}"
 CONDITION="${CONDITIONS_ARR[$COND_INDEX]}"
 
-RUN_NAME="${RUN_PREFIX}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_NORMALIZATION}_${ALGO}_${CONDITION}_seed1"
+RUN_NAME="${RUN_PREFIX}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}_${ALGO}_${CONDITION}_seed1"
 RUN_DIR="${OUT_ROOT}/${RUN_NAME}"
-RECIPE="${DATASET_TAG}/${ACTION_TARGET}_${ACTION_NORMALIZATION}/${ALGO}/${CKPT_MODE}"
+RECIPE="${DATASET_TAG}/${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}/${ALGO}/${CKPT_MODE}"
 OUTPUT="${SCORE_ROOT}/${RECIPE}"
 
 set +u
@@ -78,6 +79,7 @@ export MKL_NUM_THREADS=2
 echo "hostname=$(hostname)"
 echo "dataset_tag=${DATASET_TAG}"
 echo "task_tag=${TASK_TAG}"
+echo "action_source=${ACTION_SOURCE}"
 echo "algo=${ALGO}"
 echo "condition=${CONDITION}"
 echo "run_dir=${RUN_DIR}"

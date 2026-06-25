@@ -30,6 +30,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rlds-path", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--action-source",
+        choices=["action", "cartesian_position", "cartesian_velocity", "joint_position", "joint_velocity"],
+        default="action",
+        help=(
+            "Raw per-step action source before optional chunking/normalization. "
+            "'action' keeps the RLDS top-level steps/action field. Cartesian sources "
+            "concatenate action_dict/cartesian_* with the matching gripper_* field."
+        ),
+    )
     parser.add_argument("--action-target", choices=["single", "chunk"], default="single")
     parser.add_argument("--chunk-size", type=int, default=4)
     parser.add_argument(
@@ -85,6 +95,38 @@ def build_robot_state(steps: dict[str, Any]) -> np.ndarray:
         np.asarray(obs["joint_position"], dtype=np.float32),
     ]
     return np.concatenate(parts, axis=-1)
+
+
+def build_raw_actions(steps: dict[str, Any], source: str) -> np.ndarray:
+    if source == "action":
+        return np.asarray(steps["action"], dtype=np.float32)
+
+    action_dict = steps["action_dict"]
+    if source == "cartesian_position":
+        parts = [action_dict["cartesian_position"], action_dict["gripper_position"]]
+    elif source == "cartesian_velocity":
+        parts = [action_dict["cartesian_velocity"], action_dict["gripper_velocity"]]
+    elif source == "joint_position":
+        parts = [action_dict["joint_position"], action_dict["gripper_position"]]
+    elif source == "joint_velocity":
+        parts = [action_dict["joint_velocity"], action_dict["gripper_velocity"]]
+    else:
+        raise ValueError(f"Unsupported action source: {source}")
+    return np.concatenate([np.asarray(part, dtype=np.float32) for part in parts], axis=-1)
+
+
+def action_source_field(source: str) -> str:
+    if source == "action":
+        return "steps/action"
+    if source == "cartesian_position":
+        return "steps/action_dict/cartesian_position + gripper_position"
+    if source == "cartesian_velocity":
+        return "steps/action_dict/cartesian_velocity + gripper_velocity"
+    if source == "joint_position":
+        return "steps/action_dict/joint_position + gripper_position"
+    if source == "joint_velocity":
+        return "steps/action_dict/joint_velocity + gripper_velocity"
+    raise ValueError(f"Unsupported action source: {source}")
 
 
 def build_action_targets(actions: np.ndarray, target: str, chunk_size: int) -> np.ndarray:
@@ -183,7 +225,7 @@ def write_dataset(args: argparse.Namespace) -> None:
         steps = materialize_steps(ep["steps"])
         ep_idx = int(ep["episode_metadata"]["ep_idx"])
         episode_name = Path(as_text(ep["episode_metadata"]["file_path"])).parent.name
-        actions = build_action_targets(np.asarray(steps["action"], dtype=np.float32), args.action_target, args.chunk_size)
+        actions = build_action_targets(build_raw_actions(steps, args.action_source), args.action_target, args.chunk_size)
         row = {
             "ep_idx": ep_idx,
             "episode": episode_name,
@@ -265,6 +307,8 @@ def write_dataset(args: argparse.Namespace) -> None:
         f.attrs["total"] = int(total_samples)
         f.attrs["env_args"] = env_args
         f.attrs["rlds_path"] = str(args.rlds_path)
+        f.attrs["action_source"] = args.action_source
+        f.attrs["action_source_field"] = action_source_field(args.action_source)
         f.attrs["action_target"] = args.action_target
         f.attrs["chunk_size"] = int(args.chunk_size)
         f.attrs["action_normalization"] = args.action_normalization
@@ -279,7 +323,10 @@ def write_dataset(args: argparse.Namespace) -> None:
 
     print(f"wrote {args.output}")
     print(f"episodes={len(parsed)} train={len(train_keys)} valid={len(valid_keys)} transitions={total_samples}")
-    print(f"action_dim={all_actions.shape[-1]} action_target={args.action_target} normalization={args.action_normalization}")
+    print(
+        f"action_dim={all_actions.shape[-1]} action_source={args.action_source} "
+        f"action_target={args.action_target} normalization={args.action_normalization}"
+    )
 
 
 def main() -> None:

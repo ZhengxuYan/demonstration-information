@@ -9,8 +9,9 @@ set -euo pipefail
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
 TASK_TAG="${TASK_TAG:-wrench_to_hook}"
 RUN_PREFIX="${RUN_PREFIX:-wrench_to_hook}"
+ACTION_SOURCE="${ACTION_SOURCE:-cartesian_velocity}"
 ACTION_TARGET="${ACTION_TARGET:-single}"
-ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-bounded_minmax}"
+ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
 DATA_ROOT="${DATA_ROOT:-/iris/u/jasonyan/data}"
 DATASET_ROOT="${DATASET_ROOT:-${DATA_ROOT}/wrench_to_hook_density_datasets}"
 OUT_ROOT="${OUT_ROOT:-${DATA_ROOT}/robomimic_outputs/wrench_to_hook_density}"
@@ -25,7 +26,7 @@ DATASETS="${DATASETS:-0613_98 0615_96}"
 submit_one_dataset() {
   local dataset_tag="$1"
   local labels_csv="$2"
-  local hdf5_path="${DATASET_ROOT}/${TASK_TAG}_${dataset_tag}_${ACTION_TARGET}_${ACTION_NORMALIZATION}.hdf5"
+  local hdf5_path="${DATASET_ROOT}/${TASK_TAG}_${dataset_tag}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}.hdf5"
 
   if [[ ! -f "${hdf5_path}" ]]; then
     echo "Missing density HDF5 for ${dataset_tag}: ${hdf5_path}" >&2
@@ -44,6 +45,7 @@ submit_one_dataset() {
     DATASET_HDF5="${hdf5_path}" \
     OUT_ROOT="${OUT_ROOT}" \
     SCORE_ROOT="${SCORE_ROOT}" \
+    ACTION_SOURCE="${ACTION_SOURCE}" \
     ACTION_TARGET="${ACTION_TARGET}" \
     ACTION_NORMALIZATION="${ACTION_NORMALIZATION}" \
     CKPT_MODE="${CKPT_MODE}" \
@@ -59,6 +61,7 @@ submit_one_dataset() {
       LABELS_CSV="${labels_csv}" \
       SCORE_ROOT="${SCORE_ROOT}" \
       EVAL_ROOT="${EVAL_ROOT}" \
+      ACTION_SOURCE="${ACTION_SOURCE}" \
       ACTION_TARGET="${ACTION_TARGET}" \
       ACTION_NORMALIZATION="${ACTION_NORMALIZATION}" \
       ALGO="${algo}" \
