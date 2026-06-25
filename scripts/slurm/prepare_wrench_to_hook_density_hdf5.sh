@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96GB
 #SBATCH --job-name=wth_density_h5
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hp-z8
 #SBATCH --output=/iris/u/jasonyan/slurm/%j_wth_density_h5.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%j_wth_density_h5.err
 

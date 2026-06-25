@@ -39,8 +39,8 @@ REGIMES = (
 TERMINAL_BAD = {"FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL"}
 TERMINAL_OK = {"COMPLETED"}
 LIVE = {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "RESIZING", "SUSPENDED"}
-IRIS5_PLUS = ("--exclude", "iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8")
-ILIAD5_PLUS = ("--exclude", "iliad1,iliad2,iliad3,iliad4,iliad-hgx-1,iliad-hgx-2")
+IRIS5_PLUS = ("--exclude", "iris1,iris2,iris3,iris4,iris-hp-z8")
+ILIAD5_PLUS = ("--exclude", "iliad1,iliad2,iliad3,iliad4")
 
 
 @dataclass(frozen=True)
@@ -50,14 +50,22 @@ class Tier:
     partition: str
     slots: int
     preemptible: bool
+    gres: str = "gpu:1"
     extra_args: tuple[str, ...] = ()
 
 
 TIERS = (
-    Tier("iris_hi", "iris", "iris-hi", 6, False, IRIS5_PLUS),
-    Tier("iris", "iris", "iris", 10, True, IRIS5_PLUS),
-    Tier("iliad", "iliad", "iliad", 8, False, ILIAD5_PLUS),
-    Tier("iliad_lo", "iliad", "iliad-lo", 8, True, ILIAD5_PLUS),
+    Tier("iris_hi", "iris", "iris-hi", 6, False, "gpu:1", IRIS5_PLUS),
+    Tier("iris", "iris", "iris", 10, True, "gpu:1", IRIS5_PLUS),
+    Tier("iliad", "iliad", "iliad", 8, False, "gpu:1", ILIAD5_PLUS),
+    Tier("iliad_lo", "iliad", "iliad-lo", 8, True, "gpu:1", ILIAD5_PLUS),
+    Tier("sc_loprio_h200", "iliad", "sc-loprio", 4, True, "gpu:h200:1"),
+    Tier("sc_loprio_h100", "iliad", "sc-loprio", 2, True, "gpu:h100:1"),
+    Tier("sc_loprio_a100", "iliad", "sc-loprio", 4, True, "gpu:a100:1"),
+    Tier("sc_loprio_l40s", "iliad", "sc-loprio", 2, True, "gpu:l40s:1"),
+    Tier("sc_loprio_a6000", "iliad", "sc-loprio", 2, True, "gpu:a6000:1"),
+    Tier("sc_loprio_a40", "iliad", "sc-loprio", 1, True, "gpu:a40:1"),
+    Tier("sc_loprio_a5000", "iliad", "sc-loprio", 1, True, "gpu:a5000:1"),
 )
 
 
@@ -253,7 +261,7 @@ def sbatch_base(tier: Tier, job_name: str, wall_time: str) -> list[str]:
         "--job-name",
         job_name,
         "--gres",
-        "gpu:1",
+        tier.gres,
         "--cpus-per-task",
         "12",
         "--mem",
@@ -531,7 +539,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--score-root", default="/iris/u/jasonyan/data/wrench_to_hook_density_scores")
     parser.add_argument("--eval-root", default="/iris/u/jasonyan/data/wrench_to_hook_density_eval")
     parser.add_argument("--state-file", type=Path, default=Path("/iris/u/jasonyan/data/wrench_to_hook_density_queue_state.json"))
-    parser.add_argument("--max-train-jobs", type=int, default=32)
+    parser.add_argument("--max-train-jobs", type=int, default=48)
     parser.add_argument("--max-attempts", type=int, default=5)
     parser.add_argument("--poll-seconds", type=int, default=300)
     parser.add_argument("--train-time", default="24:00:00")

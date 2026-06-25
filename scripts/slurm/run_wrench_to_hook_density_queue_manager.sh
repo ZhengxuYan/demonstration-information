@@ -12,7 +12,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4GB
 #SBATCH --job-name=wth_den_mgr
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hp-z8
 #SBATCH --output=/iris/u/jasonyan/slurm/%j_wth_den_mgr.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%j_wth_den_mgr.err
 

@@ -9,7 +9,7 @@
 #SBATCH --mem=96GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=wth_den_score
-#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hgx-1,iris-hgx-2,iris-hp-z8,iliad1,iliad2,iliad3,iliad4,iliad-hgx-1,iliad-hgx-2
+#SBATCH --exclude=iris1,iris2,iris3,iris4,iris-hp-z8,iliad1,iliad2,iliad3,iliad4
 #SBATCH --output=/iris/u/jasonyan/slurm/%j_wth_den_score.out
 #SBATCH --error=/iris/u/jasonyan/slurm/%j_wth_den_score.err
 
