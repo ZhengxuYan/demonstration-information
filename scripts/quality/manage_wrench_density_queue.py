@@ -225,6 +225,38 @@ def job_state(job_id: str | None) -> str | None:
     return out.splitlines()[0].strip() if out.strip() else None
 
 
+def live_jobs_by_name() -> dict[str, list[tuple[str, str]]]:
+    out = run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%A|%j|%T"], check=False)
+    jobs: dict[str, list[tuple[str, str]]] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        job_id, name, state = line.split("|", 2)
+        jobs.setdefault(name, []).append((job_id, state))
+    return jobs
+
+
+def pick_live_job(jobs: list[tuple[str, str]]) -> tuple[str, str] | None:
+    for wanted_state in ("RUNNING", "PENDING"):
+        for job_id, state in jobs:
+            if state == wanted_state:
+                return job_id, state
+    return jobs[0] if jobs else None
+
+
+def prune_duplicate_live_jobs() -> None:
+    for name, jobs in live_jobs_by_name().items():
+        if not name.startswith("wth_") or name == "wth_den_mgr":
+            continue
+        keep = pick_live_job(jobs)
+        if not keep:
+            continue
+        keep_id, _ = keep
+        for job_id, state in jobs:
+            if job_id != keep_id and state == "PENDING":
+                scancel(job_id)
+
+
 def pending_reason(job_id: str | None) -> str:
     if not job_id:
         return ""
@@ -375,7 +407,7 @@ def submit_train(args: argparse.Namespace, task: Task) -> str:
         "RESUME": "1" if tier.preemptible or task.train_attempts > 0 or checkpoint_done(args, task) else "0",
         "WANDB_PROJECT": "wrench-to-hook-density",
     }
-    cmd = sbatch_base(tier, f"wth_{task.dataset}_{task.regime}_{task.algo}_{task.condition}", args.train_time)
+    cmd = sbatch_base(tier, train_job_name(task), args.train_time)
     cmd.extend(
         [
             "--wrap",
@@ -405,7 +437,7 @@ def submit_score(args: argparse.Namespace, task: Task) -> str:
         "CKPT_MODE": args.ckpt_mode,
         "RESUME": "1",
     }
-    cmd = sbatch_base(tier, f"wth_score_{task.dataset}_{task.regime}_{task.algo}_{task.condition}", args.score_time)
+    cmd = sbatch_base(tier, score_job_name(task), args.score_time)
     cmd.extend(
         [
             "--wrap",
@@ -413,6 +445,14 @@ def submit_score(args: argparse.Namespace, task: Task) -> str:
         ]
     )
     return run(cmd)
+
+
+def train_job_name(task: Task) -> str:
+    return f"wth_{task.dataset}_{task.regime}_{task.algo}_{task.condition}"
+
+
+def score_job_name(task: Task) -> str:
+    return f"wth_score_{task.dataset}_{task.regime}_{task.algo}_{task.condition}"
 
 
 def submit_eval(args: argparse.Namespace, dataset: str, algo: str, label_column: str, twofold: bool) -> str:
@@ -479,7 +519,15 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
             state.prepare_states[dataset] = "COMPLETED"
             continue
         state.prepare_states[dataset] = job_state(job_id) or "UNKNOWN"
+    live_jobs = live_jobs_by_name()
     for task in state.tasks.values():
+        if not train_done_marker(args, task):
+            live_train = pick_live_job(live_jobs.get(train_job_name(task), []))
+            if live_train and (not task.train_job_id or task.train_state not in LIVE):
+                task.train_job_id, task.train_state = live_train
+        live_score = pick_live_job(live_jobs.get(score_job_name(task), []))
+        if live_score and (not task.score_job_id or task.score_state not in LIVE):
+            task.score_job_id, task.score_state = live_score
         train_state = job_state(task.train_job_id) if task.train_job_id else None
         has_checkpoint = checkpoint_done(args, task)
         if train_done_marker(args, task) or (train_state in TERMINAL_OK and has_checkpoint):
@@ -500,6 +548,7 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
 
 def step(args: argparse.Namespace, state: ManagerState) -> None:
     ensure_tasks(state)
+    prune_duplicate_live_jobs()
     for dataset in DATASETS:
         if hdf5_ready(args, dataset):
             state.prepare_states[dataset] = "COMPLETED"
@@ -568,10 +617,15 @@ def should_migrate_pending(args: argparse.Namespace, job_id: str | None, submitt
     reason = pending_reason(job_id)
     if not reason:
         return False
-    if "ReqNodeNotAvail" in reason or "UnavailableNodes" in reason:
+    if (
+        "ReqNodeNotAvail" in reason
+        or "UnavailableNodes" in reason
+        or "DOWN" in reason
+        or "DRAINED" in reason
+    ):
         return True
     age = time.time() - submitted_at if submitted_at else 0.0
-    return age >= args.pending_migrate_seconds and reason in {"Priority", "Resources"}
+    return age >= args.pending_migrate_seconds and ("Priority" in reason or "Resources" in reason)
 
 
 def migrate_pending_jobs(args: argparse.Namespace, state: ManagerState) -> None:
