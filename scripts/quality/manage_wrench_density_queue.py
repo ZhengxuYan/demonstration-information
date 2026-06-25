@@ -548,7 +548,8 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
         if score_done(args, task):
             task.score_state = "COMPLETED"
         elif task.score_job_id:
-            task.score_state = job_state(task.score_job_id) or "UNKNOWN"
+            score_state = job_state(task.score_job_id) or "UNKNOWN"
+            task.score_state = "WAITING" if score_state in TERMINAL_OK else score_state
         elif task.score_state == "COMPLETED":
             task.score_state = "WAITING"
     for key, job_id in list(state.eval_jobs.items()):
