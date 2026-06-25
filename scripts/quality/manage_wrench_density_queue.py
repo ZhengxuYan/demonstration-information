@@ -83,9 +83,13 @@ class Task:
     train_job_id: str | None = None
     train_state: str = "WAITING"
     train_attempts: int = 0
+    train_tier_cursor: int | None = None
+    train_submitted_at: float = 0.0
     score_job_id: str | None = None
     score_state: str = "WAITING"
     score_attempts: int = 0
+    score_tier_cursor: int | None = None
+    score_submitted_at: float = 0.0
 
 
 @dataclass
@@ -181,6 +185,22 @@ def tier_for(task: Task) -> Tier:
     return TIERS[-1]
 
 
+def tier_position_for(task: Task) -> int:
+    idx = task.tier_index
+    for pos, tier in enumerate(TIERS):
+        if idx < tier.slots:
+            return pos
+        idx -= tier.slots
+    return len(TIERS) - 1
+
+
+def tier_for_phase(task: Task, phase: str) -> Tier:
+    cursor = task.train_tier_cursor if phase == "train" else task.score_tier_cursor
+    if cursor is None:
+        cursor = tier_position_for(task)
+    return TIERS[min(cursor, len(TIERS) - 1)]
+
+
 def tier_capacity() -> int:
     return sum(tier.slots for tier in TIERS)
 
@@ -205,6 +225,18 @@ def job_state(job_id: str | None) -> str | None:
     return out.splitlines()[0].strip() if out.strip() else None
 
 
+def pending_reason(job_id: str | None) -> str:
+    if not job_id:
+        return ""
+    out = run(["squeue", "-h", "-j", str(job_id), "-t", "PD", "-o", "%R"], check=False)
+    return out.splitlines()[0].strip() if out.strip() else ""
+
+
+def scancel(job_id: str | None) -> None:
+    if job_id:
+        run(["scancel", str(job_id)], check=False)
+
+
 def run_name(args: argparse.Namespace, task: Task) -> str:
     middle = f"{args.action_target}_{args.action_source}_{args.action_normalization}"
     if task.fold_tag:
@@ -215,6 +247,11 @@ def run_name(args: argparse.Namespace, task: Task) -> str:
 def checkpoint_done(args: argparse.Namespace, task: Task) -> bool:
     run_dir = Path(args.out_root) / run_name(args, task)
     return any(run_dir.glob("*/models/*best*validation*.pth")) or any(run_dir.glob("*/models/*.pth"))
+
+
+def train_done_marker(args: argparse.Namespace, task: Task) -> bool:
+    run_dir = Path(args.out_root) / run_name(args, task)
+    return (run_dir / "TRAIN_DONE").is_file()
 
 
 def score_output(args: argparse.Namespace, task: Task) -> Path:
@@ -318,7 +355,7 @@ def submit_prepare(args: argparse.Namespace, dataset: str) -> str:
 
 
 def submit_train(args: argparse.Namespace, task: Task) -> str:
-    tier = tier_for(task)
+    tier = tier_for_phase(task, "train")
     env = {
         "REPO": args.repo,
         "TASK_TAG": args.task_tag,
@@ -335,7 +372,7 @@ def submit_train(args: argparse.Namespace, task: Task) -> str:
         "FOLD_TAG": task.fold_tag,
         "TRAIN_FILTER_KEY": task.train_filter,
         "VALID_FILTER_KEY": task.valid_filter,
-        "RESUME": "1" if tier.preemptible or task.train_attempts > 0 else "0",
+        "RESUME": "1" if tier.preemptible or task.train_attempts > 0 or checkpoint_done(args, task) else "0",
         "WANDB_PROJECT": "wrench-to-hook-density",
     }
     cmd = sbatch_base(tier, f"wth_{task.dataset}_{task.regime}_{task.algo}_{task.condition}", args.train_time)
@@ -349,7 +386,7 @@ def submit_train(args: argparse.Namespace, task: Task) -> str:
 
 
 def submit_score(args: argparse.Namespace, task: Task) -> str:
-    tier = tier_for(task)
+    tier = tier_for_phase(task, "score")
     env = {
         "REPO": args.repo,
         "TASK_TAG": args.task_tag,
@@ -443,10 +480,16 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
             continue
         state.prepare_states[dataset] = job_state(job_id) or "UNKNOWN"
     for task in state.tasks.values():
-        if checkpoint_done(args, task):
+        train_state = job_state(task.train_job_id) if task.train_job_id else None
+        has_checkpoint = checkpoint_done(args, task)
+        if train_done_marker(args, task) or (train_state in TERMINAL_OK and has_checkpoint):
             task.train_state = "COMPLETED"
-        elif task.train_job_id:
-            task.train_state = job_state(task.train_job_id) or "UNKNOWN"
+        elif train_state:
+            task.train_state = train_state
+        elif task.train_state == "COMPLETED":
+            # Older manager versions treated any checkpoint as completion. Downgrade
+            # those checkpoint-only entries so they resume instead of being scored.
+            task.train_state = "WAITING"
         if score_done(args, task):
             task.score_state = "COMPLETED"
         elif task.score_job_id:
@@ -465,6 +508,7 @@ def step(args: argparse.Namespace, state: ManagerState) -> None:
             state.prepare_states[dataset] = "PENDING"
 
     refresh(args, state)
+    migrate_pending_jobs(args, state)
 
     # Submit training in manifest order: all 06/13 tasks are before 06/15 tasks.
     for task in state.tasks.values():
@@ -479,11 +523,15 @@ def step(args: argparse.Namespace, state: ManagerState) -> None:
         if task.train_state in TERMINAL_BAD or task.train_job_id is None or task.train_state in {"WAITING", "UNKNOWN"}:
             if task.train_attempts >= args.max_attempts:
                 continue
+            if task.train_tier_cursor is None:
+                task.train_tier_cursor = tier_position_for(task)
             task.train_attempts += 1
             task.train_job_id = submit_train(args, task)
+            task.train_submitted_at = time.time()
             task.train_state = "PENDING"
 
     refresh(args, state)
+    migrate_pending_jobs(args, state)
 
     # Submit scoring only after the corresponding train model is complete.
     for task in state.tasks.values():
@@ -492,11 +540,15 @@ def step(args: argparse.Namespace, state: ManagerState) -> None:
         if task.score_state in TERMINAL_BAD or task.score_job_id is None or task.score_state in {"WAITING", "UNKNOWN"}:
             if task.score_attempts >= args.max_attempts:
                 continue
+            if task.score_tier_cursor is None:
+                task.score_tier_cursor = tier_position_for(task)
             task.score_attempts += 1
             task.score_job_id = submit_score(args, task)
+            task.score_submitted_at = time.time()
             task.score_state = "PENDING"
 
     refresh(args, state)
+    migrate_pending_jobs(args, state)
 
     for dataset in DATASETS:
         for algo in ALGOS:
@@ -510,6 +562,34 @@ def step(args: argparse.Namespace, state: ManagerState) -> None:
                 if key not in state.eval_jobs and twofold_group_score_done(args, dataset, algo):
                     state.eval_jobs[key] = submit_eval(args, dataset, algo, label_column, twofold=True)
                     state.eval_states[key] = "PENDING"
+
+
+def should_migrate_pending(args: argparse.Namespace, job_id: str | None, submitted_at: float) -> bool:
+    reason = pending_reason(job_id)
+    if not reason:
+        return False
+    if "ReqNodeNotAvail" in reason or "UnavailableNodes" in reason:
+        return True
+    age = time.time() - submitted_at if submitted_at else 0.0
+    return age >= args.pending_migrate_seconds and reason in {"Priority", "Resources"}
+
+
+def migrate_pending_jobs(args: argparse.Namespace, state: ManagerState) -> None:
+    for task in state.tasks.values():
+        if task.train_state == "PENDING" and should_migrate_pending(args, task.train_job_id, task.train_submitted_at):
+            cursor = task.train_tier_cursor if task.train_tier_cursor is not None else tier_position_for(task)
+            if cursor < len(TIERS) - 1:
+                scancel(task.train_job_id)
+                task.train_tier_cursor = cursor + 1
+                task.train_job_id = None
+                task.train_state = "WAITING"
+        if task.score_state == "PENDING" and should_migrate_pending(args, task.score_job_id, task.score_submitted_at):
+            cursor = task.score_tier_cursor if task.score_tier_cursor is not None else tier_position_for(task)
+            if cursor < len(TIERS) - 1:
+                scancel(task.score_job_id)
+                task.score_tier_cursor = cursor + 1
+                task.score_job_id = None
+                task.score_state = "WAITING"
 
 
 def summary(state: ManagerState) -> str:
@@ -540,6 +620,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-file", type=Path, default=Path("/iris/u/jasonyan/data/wrench_to_hook_density_queue_state.json"))
     parser.add_argument("--max-train-jobs", type=int, default=48)
     parser.add_argument("--max-attempts", type=int, default=5)
+    parser.add_argument("--pending-migrate-seconds", type=int, default=900)
     parser.add_argument("--poll-seconds", type=int, default=300)
     parser.add_argument("--train-time", default="24:00:00")
     parser.add_argument("--score-time", default="08:00:00")

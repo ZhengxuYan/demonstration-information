@@ -154,3 +154,12 @@ if ! find "${RUN_DIR}" -path '*/models/*.pth' -print -quit 2>/dev/null | grep -q
   echo "training finished without producing a checkpoint under: ${RUN_DIR}" >&2
   exit 1
 fi
+{
+  echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "slurm_job_id=${SLURM_JOB_ID:-}"
+  echo "hostname=$(hostname)"
+  echo "dataset_tag=${DATASET_TAG}"
+  echo "algo=${ALGO}"
+  echo "condition=${CONDITION}"
+  echo "fold_tag=${FOLD_TAG}"
+} > "${RUN_DIR}/TRAIN_DONE"
