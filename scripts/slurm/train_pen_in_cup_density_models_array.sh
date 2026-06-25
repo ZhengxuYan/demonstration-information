@@ -140,11 +140,17 @@ echo "run_dir=${RUN_DIR}"
 echo "resume_requested=${RESUME:-0}"
 echo "resume_enabled=$([[ ${#RESUME_FLAG[@]} -gt 0 ]] && echo 1 || echo 0)"
 
+TRAIN_LOG="$(mktemp /tmp/${TASK_TAG}_${DATASET_TAG}_${ALGO}_${CONDITION}_train.XXXXXX.log)"
 python robomimic/scripts/train.py \
   --config "${CONFIG}" \
   --dataset "${DATASET_HDF5}" \
   --name "${RUN_NAME}" \
-  "${RESUME_FLAG[@]}"
+  "${RESUME_FLAG[@]}" 2>&1 | tee "${TRAIN_LOG}"
+
+if grep -qE 'run failed with error:|EOF when reading a line|Traceback \\(most recent call last\\)' "${TRAIN_LOG}"; then
+  echo "training command reported a failure; see ${TRAIN_LOG}" >&2
+  exit 1
+fi
 
 if [[ ! -d "${RUN_DIR}" ]]; then
   echo "training did not create run directory: ${RUN_DIR}" >&2

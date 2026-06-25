@@ -286,12 +286,45 @@ def train_done_marker(args: argparse.Namespace, task: Task) -> bool:
     return (run_dir / "TRAIN_DONE").is_file()
 
 
+def marker_job_id(args: argparse.Namespace, task: Task) -> str | None:
+    marker = Path(args.out_root) / run_name(args, task) / "TRAIN_DONE"
+    if not marker.is_file():
+        return None
+    for line in marker.read_text(errors="ignore").splitlines():
+        if line.startswith("slurm_job_id="):
+            value = line.split("=", 1)[1].strip()
+            return value or None
+    return None
+
+
+def job_log_failed(args: argparse.Namespace, job_id: str | None) -> bool:
+    if not job_id:
+        return False
+    candidates = [
+        Path(args.repo) / f"slurm-{job_id}.out",
+        Path(args.repo) / f"slurm-{job_id}.err",
+        Path("/iris/u/jasonyan/slurm") / f"{job_id}_wth_density.out",
+        Path("/iris/u/jasonyan/slurm") / f"{job_id}_wth_density.err",
+        Path("/iris/u/jasonyan/slurm") / f"{job_id}_wth_den_score.out",
+        Path("/iris/u/jasonyan/slurm") / f"{job_id}_wth_den_score.err",
+    ]
+    needles = ("run failed with error:", "EOF when reading a line", "Traceback (most recent call last)")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        text = path.read_text(errors="ignore")
+        if any(needle in text for needle in needles):
+            return True
+    return False
+
+
 def train_done(args: argparse.Namespace, task: Task, state: str | None = None) -> bool:
-    if train_done_marker(args, task):
+    marker_id = marker_job_id(args, task)
+    if marker_id and not job_log_failed(args, marker_id):
         return True
     if state is None:
         state = job_state(task.train_job_id) if task.train_job_id else None
-    return state in TERMINAL_OK and checkpoint_done(args, task)
+    return state in TERMINAL_OK and checkpoint_done(args, task) and not job_log_failed(args, task.train_job_id)
 
 
 def score_output(args: argparse.Namespace, task: Task) -> Path:
@@ -539,6 +572,9 @@ def refresh(args: argparse.Namespace, state: ManagerState) -> None:
         train_state = job_state(task.train_job_id) if task.train_job_id else None
         if train_done(args, task, train_state):
             task.train_state = "COMPLETED"
+        elif train_state in TERMINAL_OK:
+            task.train_job_id = None
+            task.train_state = "WAITING"
         elif train_state:
             task.train_state = train_state
         elif task.train_state == "COMPLETED":
