@@ -60,7 +60,6 @@ TIERS = (
     Tier("iliad", "iliad", "iliad", 8, False, "gpu:1", ILIAD5_PLUS),
     Tier("iliad_lo", "iliad", "iliad-lo", 8, True, "gpu:1", ILIAD5_PLUS),
     Tier("sc_loprio_h200", "iliad", "sc-loprio", 4, True, "gpu:h200:1"),
-    Tier("sc_loprio_h100", "iliad", "sc-loprio", 2, True, "gpu:h100:1"),
     Tier("sc_loprio_a100", "iliad", "sc-loprio", 4, True, "gpu:a100:1"),
     Tier("sc_loprio_l40s", "iliad", "sc-loprio", 2, True, "gpu:l40s:1"),
     Tier("sc_loprio_a6000", "iliad", "sc-loprio", 2, True, "gpu:a6000:1"),
