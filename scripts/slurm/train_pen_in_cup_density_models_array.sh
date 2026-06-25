@@ -29,6 +29,9 @@ CONFIG_ROOT="${CONFIG_ROOT:-/iris/u/jasonyan/data/${TASK_TAG}_density_configs}"
 ACTION_SOURCE="${ACTION_SOURCE:-action}"
 ACTION_TARGET="${ACTION_TARGET:-single}"
 ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
+FOLD_TAG="${FOLD_TAG:-}"
+TRAIN_FILTER_KEY="${TRAIN_FILTER_KEY:-train}"
+VALID_FILTER_KEY="${VALID_FILTER_KEY:-valid}"
 ALGOS_CSV="${ALGOS:-gaussian,gmm,discrete}"
 CONDITIONS_CSV="${CONDITIONS:-image_state,image,state,action_prior}"
 NUM_EPOCHS="${NUM_EPOCHS:-2000}"
@@ -59,8 +62,16 @@ COND_INDEX=$((ZERO % ${#CONDITIONS_ARR[@]}))
 ALGO="${ALGOS_ARR[$ALGO_INDEX]}"
 CONDITION="${CONDITIONS_ARR[$COND_INDEX]}"
 
-RUN_NAME="${RUN_PREFIX}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}_${ALGO}_${CONDITION}_seed1"
-CONFIG="${CONFIG_ROOT}/${DATASET_TAG}/${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}/${RUN_NAME}.json"
+RECIPE_BASE="${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}"
+if [[ -n "${FOLD_TAG}" ]]; then
+  RECIPE_BASE="${RECIPE_BASE}/${FOLD_TAG}"
+fi
+RUN_MIDDLE="${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}"
+if [[ -n "${FOLD_TAG}" ]]; then
+  RUN_MIDDLE="${RUN_MIDDLE}_${FOLD_TAG}"
+fi
+RUN_NAME="${RUN_PREFIX}_${DATASET_TAG}_${RUN_MIDDLE}_${ALGO}_${CONDITION}_seed1"
+CONFIG="${CONFIG_ROOT}/${DATASET_TAG}/${RECIPE_BASE}/${RUN_NAME}.json"
 RUN_DIR="${OUT_ROOT}/${RUN_NAME}"
 if [[ -d "${RUN_DIR}" ]] && ! find "${RUN_DIR}" -path '*/models/*.pth' -print -quit 2>/dev/null | grep -q .; then
   echo "removing failed empty run directory without checkpoints: ${RUN_DIR}"
@@ -98,6 +109,8 @@ python scripts/quality/write_pen_in_cup_density_bc_config.py \
   --learning-rate "${LEARNING_RATE}" \
   --l2-regularization "${L2_REGULARIZATION}" \
   --actor-layer-dims "${ACTOR_LAYER_DIMS}" \
+  --train-filter-key "${TRAIN_FILTER_KEY}" \
+  --valid-filter-key "${VALID_FILTER_KEY}" \
   --gmm-modes "${GMM_MODES}" \
   --discrete-bins "${DISCRETE_BINS}" \
   --discrete-loss-type "${DISCRETE_LOSS_TYPE}" \
@@ -117,6 +130,9 @@ echo "dataset_tag=${DATASET_TAG}"
 echo "task_tag=${TASK_TAG}"
 echo "dataset_hdf5=${DATASET_HDF5}"
 echo "action_source=${ACTION_SOURCE}"
+echo "fold_tag=${FOLD_TAG}"
+echo "train_filter_key=${TRAIN_FILTER_KEY}"
+echo "valid_filter_key=${VALID_FILTER_KEY}"
 echo "algo=${ALGO}"
 echo "condition=${CONDITION}"
 echo "run_name=${RUN_NAME}"

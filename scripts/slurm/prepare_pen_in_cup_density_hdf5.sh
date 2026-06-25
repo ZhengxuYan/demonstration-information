@@ -31,6 +31,8 @@ ACTION_NORMALIZATION="${ACTION_NORMALIZATION:-none}"
 ACTION_BOUND_LOW_PERCENTILE="${ACTION_BOUND_LOW_PERCENTILE:-1}"
 ACTION_BOUND_HIGH_PERCENTILE="${ACTION_BOUND_HIGH_PERCENTILE:-99}"
 VALID_RATIO="${VALID_RATIO:-0.1}"
+NUM_FOLDS="${NUM_FOLDS:-0}"
+FOLD_VALID_RATIO="${FOLD_VALID_RATIO:-${VALID_RATIO}}"
 SEED="${SEED:-1}"
 ENV_NAME="${ENV_NAME:-${TASK_TAG}_density}"
 OUTPUT="${OUTPUT:-${OUT_ROOT}/${TASK_TAG}_${DATASET_TAG}_${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}.hdf5}"
@@ -52,6 +54,8 @@ echo "action_target=${ACTION_TARGET}"
 echo "action_normalization=${ACTION_NORMALIZATION}"
 echo "action_bound_low_percentile=${ACTION_BOUND_LOW_PERCENTILE}"
 echo "action_bound_high_percentile=${ACTION_BOUND_HIGH_PERCENTILE}"
+echo "num_folds=${NUM_FOLDS}"
+echo "fold_valid_ratio=${FOLD_VALID_RATIO}"
 
 python scripts/quality/export_droid_rlds_to_robomimic_density_hdf5.py \
   --rlds-path "${RLDS_PATH}" \
@@ -64,6 +68,8 @@ python scripts/quality/export_droid_rlds_to_robomimic_density_hdf5.py \
   --action-bound-high-percentile "${ACTION_BOUND_HIGH_PERCENTILE}" \
   --env-name "${ENV_NAME}" \
   --valid-ratio "${VALID_RATIO}" \
+  --num-folds "${NUM_FOLDS}" \
+  --fold-valid-ratio "${FOLD_VALID_RATIO}" \
   --seed "${SEED}" \
   --overwrite
 

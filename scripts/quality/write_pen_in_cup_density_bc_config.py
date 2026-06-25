@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--l2-regularization", type=float, default=0.0)
     parser.add_argument("--actor-layer-dims", type=str, default="1024,1024")
+    parser.add_argument("--train-filter-key", default="train")
+    parser.add_argument("--valid-filter-key", default="valid")
     parser.add_argument("--hdf5-normalize-obs", action="store_true")
     parser.add_argument("--gmm-modes", type=int, default=5)
     parser.add_argument("--gaussian-min-std", type=float, default=1e-4)
@@ -90,8 +92,8 @@ def main() -> None:
     cfg["train"]["output_dir"] = args.output_dir
     cfg["train"]["num_data_workers"] = 0
     cfg["train"]["hdf5_cache_mode"] = "low_dim"
-    cfg["train"]["hdf5_filter_key"] = "train"
-    cfg["train"]["hdf5_validation_filter_key"] = "valid"
+    cfg["train"]["hdf5_filter_key"] = args.train_filter_key
+    cfg["train"]["hdf5_validation_filter_key"] = args.valid_filter_key
     cfg["train"]["hdf5_load_next_obs"] = False
     cfg["train"]["hdf5_normalize_obs"] = bool(args.hdf5_normalize_obs)
     cfg["train"]["seq_length"] = 1

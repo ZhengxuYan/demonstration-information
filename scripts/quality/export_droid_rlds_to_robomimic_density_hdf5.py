@@ -52,6 +52,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-name", default="droid_density")
     parser.add_argument("--valid-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--num-folds", type=int, default=0, help="Optional held-out fold masks to write, e.g. 2.")
+    parser.add_argument(
+        "--fold-valid-ratio",
+        type=float,
+        default=None,
+        help="Validation fraction inside each fold training pool. Defaults to --valid-ratio.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -201,6 +208,27 @@ def action_clip_stats(actions: np.ndarray, mode: str, stats: dict[str, np.ndarra
     }
 
 
+def split_train_valid_indices(indices: np.ndarray, valid_ratio: float, rng: np.random.Generator) -> tuple[list[int], list[int]]:
+    indices = np.asarray(indices, dtype=np.int64)
+    if len(indices) < 2:
+        raise ValueError(f"Need at least two demos to split train/valid, got {len(indices)}")
+    valid_count = max(1, int(round(valid_ratio * len(indices))))
+    valid_count = min(valid_count, len(indices) - 1)
+    shuffled = indices.copy()
+    rng.shuffle(shuffled)
+    valid = sorted(shuffled[:valid_count].astype(int).tolist())
+    train = sorted(shuffled[valid_count:].astype(int).tolist())
+    return train, valid
+
+
+def mask_values(demo_keys: list[str], indices: list[int]) -> np.ndarray:
+    return np.asarray([demo_keys[idx].encode("utf-8") for idx in indices], dtype="S")
+
+
+def write_mask(mask_group: h5py.Group, name: str, demo_keys: list[str], indices: list[int]) -> None:
+    mask_group.create_dataset(name, data=mask_values(demo_keys, indices))
+
+
 def sorted_episode_rows(builder) -> list[dict[str, Any]]:
     ds = builder.as_dataset(split="train", shuffle_files=False)
     rows = list(tfds.as_numpy(ds))
@@ -241,9 +269,12 @@ def write_dataset(args: argparse.Namespace) -> None:
         raw_action_targets.append(actions)
 
     rng = np.random.default_rng(args.seed)
-    valid_count = max(1, int(round(args.valid_ratio * len(parsed))))
-    valid_count = min(valid_count, len(parsed) - 1)
-    valid_indices = set(rng.choice(np.arange(len(parsed)), size=valid_count, replace=False).astype(int).tolist())
+    train_indices, valid_indices_list = split_train_valid_indices(
+        np.arange(len(parsed)),
+        args.valid_ratio,
+        rng,
+    )
+    valid_indices = set(valid_indices_list)
     train_actions = np.concatenate([row["actions"] for idx, row in enumerate(parsed) if idx not in valid_indices], axis=0)
     all_actions = np.concatenate(raw_action_targets, axis=0)
     stats = normalization_stats(
@@ -262,11 +293,13 @@ def write_dataset(args: argparse.Namespace) -> None:
         data = f.create_group("data")
         env_args = json.dumps({"env_name": args.env_name, "type": 2, "env_kwargs": {}})
         data.attrs["env_args"] = env_args
+        demo_keys = []
         train_keys = []
         valid_keys = []
         total_samples = 0
         for out_idx, row in enumerate(parsed):
             demo_key = f"demo_{out_idx}"
+            demo_keys.append(demo_key)
             if out_idx in valid_indices:
                 valid_keys.append(demo_key)
             else:
@@ -303,6 +336,30 @@ def write_dataset(args: argparse.Namespace) -> None:
         mask = f.create_group("mask")
         mask.create_dataset("train", data=np.asarray([x.encode("utf-8") for x in train_keys], dtype="S"))
         mask.create_dataset("valid", data=np.asarray([x.encode("utf-8") for x in valid_keys], dtype="S"))
+        write_mask(mask, "all", demo_keys, list(range(len(parsed))))
+
+        if args.num_folds:
+            if args.num_folds < 2:
+                raise ValueError("--num-folds must be 0 or >= 2")
+            fold_valid_ratio = args.valid_ratio if args.fold_valid_ratio is None else args.fold_valid_ratio
+            if not 0.0 < fold_valid_ratio < 1.0:
+                raise ValueError("--fold-valid-ratio must be in (0, 1)")
+            fold_rng = np.random.default_rng(args.seed)
+            fold_order = np.arange(len(parsed))
+            fold_rng.shuffle(fold_order)
+            folds = [np.asarray(x, dtype=np.int64) for x in np.array_split(fold_order, args.num_folds)]
+            all_indices = set(range(len(parsed)))
+            for fold_idx, score_indices_arr in enumerate(folds):
+                score_indices = sorted(score_indices_arr.astype(int).tolist())
+                train_pool = sorted(all_indices - set(score_indices))
+                fold_train, fold_valid = split_train_valid_indices(
+                    np.asarray(train_pool, dtype=np.int64),
+                    fold_valid_ratio,
+                    fold_rng,
+                )
+                write_mask(mask, f"fold{fold_idx}_train", demo_keys, fold_train)
+                write_mask(mask, f"fold{fold_idx}_valid", demo_keys, fold_valid)
+                write_mask(mask, f"fold{fold_idx}_score", demo_keys, score_indices)
 
         f.attrs["total"] = int(total_samples)
         f.attrs["env_args"] = env_args
@@ -315,6 +372,8 @@ def write_dataset(args: argparse.Namespace) -> None:
         f.attrs["action_bound_low_percentile"] = float(args.action_bound_low_percentile)
         f.attrs["action_bound_high_percentile"] = float(args.action_bound_high_percentile)
         f.attrs["valid_ratio"] = float(args.valid_ratio)
+        f.attrs["num_folds"] = int(args.num_folds)
+        f.attrs["fold_valid_ratio"] = float(args.valid_ratio if args.fold_valid_ratio is None else args.fold_valid_ratio)
         f.attrs["split_seed"] = int(args.seed)
         for key, value in stats.items():
             f.attrs[f"action_norm_{key}"] = value
