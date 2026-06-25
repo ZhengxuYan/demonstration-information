@@ -80,6 +80,10 @@ fi
 RESUME_FLAG=()
 if [[ "${RESUME:-0}" == "1" ]] && find "${RUN_DIR}" -path '*/models/last.pth' -print -quit 2>/dev/null | grep -q .; then
   RESUME_FLAG=(--resume)
+elif [[ -d "${RUN_DIR}" ]]; then
+  BACKUP_DIR="${RUN_DIR}.failed_resume_backup.$(date -u +%Y%m%dT%H%M%SZ).${SLURM_JOB_ID:-manual}"
+  echo "existing run directory cannot be resumed because no last.pth was found; moving it to ${BACKUP_DIR}"
+  mv "${RUN_DIR}" "${BACKUP_DIR}"
 fi
 
 set +u
