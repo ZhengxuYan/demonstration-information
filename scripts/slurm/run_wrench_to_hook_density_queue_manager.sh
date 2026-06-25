@@ -5,7 +5,7 @@
 # train / score jobs, keeping at most MAX_TRAIN_JOBS model-training jobs in
 # Slurm at once. Cancel this manager job to stop automatic resubmission.
 
-#SBATCH --partition=iris-hi
+#SBATCH --partition=iris
 #SBATCH --account=iris
 #SBATCH --time=7-00:00:00
 #SBATCH --nodes=1

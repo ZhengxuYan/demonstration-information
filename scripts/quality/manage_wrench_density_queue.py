@@ -624,7 +624,7 @@ def should_migrate_pending(args: argparse.Namespace, job_id: str | None, submitt
         or "DRAINED" in reason
     ):
         return True
-    age = time.time() - submitted_at if submitted_at else 0.0
+    age = time.time() - submitted_at if submitted_at else float("inf")
     return age >= args.pending_migrate_seconds and ("Priority" in reason or "Resources" in reason)
 
 
