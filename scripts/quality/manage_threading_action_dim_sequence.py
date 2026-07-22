@@ -178,6 +178,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-active-gpu", type=int, default=32)
     parser.add_argument("--max-attempts", type=int, default=6)
     parser.add_argument("--pending-migrate-seconds", type=int, default=1800)
+    parser.add_argument(
+        "--stages",
+        default=",".join(stage.key for stage in STAGES),
+        help="Comma-separated stage keys to manage.",
+    )
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
 
@@ -541,11 +546,17 @@ def status_line(state: ManagerState) -> str:
 
 def main() -> None:
     args = parse_args()
+    requested = [value.strip() for value in args.stages.split(",") if value.strip()]
+    known = {stage.key: stage for stage in STAGES}
+    unknown = sorted(set(requested) - set(known))
+    if unknown:
+        raise ValueError(f"Unknown stages: {unknown}; choices={sorted(known)}")
+    stages = [known[key] for key in requested]
     state = load_state(args.state_file)
     while True:
         refresh(state)
         migrate_pending(state, args)
-        remaining = [stage for stage in STAGES if not report_done(stage)]
+        remaining = [stage for stage in stages if not report_done(stage)]
         if not remaining:
             save_state(args.state_file, state)
             print("all stages completed", flush=True)

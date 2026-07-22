@@ -27,4 +27,5 @@ python scripts/quality/manage_threading_action_dim_sequence.py \
   --max-active-gpu "${MAX_ACTIVE_GPU:-32}" \
   --max-attempts "${MAX_ATTEMPTS:-6}" \
   --pending-migrate-seconds "${PENDING_MIGRATE_SECONDS:-1800}" \
-  --poll-seconds "${POLL_SECONDS:-300}"
+  --poll-seconds "${POLL_SECONDS:-300}" \
+  --stages "${STAGES:-square_7d,square_6d,d1_7d,d1_6d}"
