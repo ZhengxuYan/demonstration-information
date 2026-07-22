@@ -237,6 +237,68 @@ def pending_reason(job_id: str | None) -> str:
     return out.splitlines()[0].strip() if out.strip() else ""
 
 
+def expected_job_name(key: str) -> str | None:
+    parts = key.split(":")
+    if parts[0] == "train" and len(parts) == 5:
+        _, stage_key, regime, algo, condition = parts
+        return f"pip_{stage_key}_{regime}_{algo}_{condition}"
+    if parts[0] == "score" and len(parts) == 4:
+        _, stage_key, regime, algo = parts
+        return f"pip_{stage_key}_{regime}_{algo}_score"
+    return None
+
+
+def live_jobs_named(name: str) -> list[tuple[str, str]]:
+    output = run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%A|%j|%T"], check=False)
+    jobs = []
+    for line in output.splitlines():
+        fields = line.split("|", 2)
+        if len(fields) == 3 and fields[1] == name and fields[2] in LIVE:
+            jobs.append((fields[0], fields[2]))
+    return jobs
+
+
+def infer_live_job_tier(job_id: str) -> int | None:
+    output = run(["squeue", "-h", "-j", job_id, "-o", "%P|%b"], check=False)
+    if not output.strip():
+        return None
+    partition, gres = output.splitlines()[0].split("|", 1)
+    partition = partition.rstrip("*")
+    if partition == "iris-hi":
+        return 0
+    if partition == "iliad":
+        return 1
+    if partition == "iris":
+        return 2
+    if partition == "iliad-lo":
+        return 3
+    if partition == "sc-loprio":
+        lowered = gres.lower()
+        for idx, token in ((4, "l40s"), (5, "a6000"), (6, "a40"), (7, "a5000")):
+            if token in lowered:
+                return idx
+    return None
+
+
+def adopt_and_prune_live_job(key: str, item: JobRecord) -> bool:
+    name = expected_job_name(key)
+    if name is None:
+        return False
+    jobs = live_jobs_named(name)
+    if not jobs:
+        return False
+    jobs.sort(key=lambda pair: (pair[1] != "RUNNING", int(pair[0])))
+    keep_id, keep_state = jobs[0]
+    for duplicate_id, _ in jobs[1:]:
+        run(["scancel", duplicate_id], check=False)
+    item.job_id = keep_id
+    item.state = keep_state
+    inferred_tier = infer_live_job_tier(keep_id)
+    if inferred_tier is not None:
+        item.tier = inferred_tier
+    return True
+
+
 def partition_counts() -> dict[str, int]:
     out = run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%P|%T"], check=False)
     counts: dict[str, int] = {}
@@ -320,6 +382,8 @@ def refresh(state: ManagerState) -> None:
     for key, item in state.jobs.items():
         if artifact_done(key):
             item.state = "COMPLETED"
+            continue
+        if adopt_and_prune_live_job(key, item):
             continue
         status = job_state(item.job_id)
         if status in LIVE:
@@ -485,7 +549,14 @@ def migrate_pending(state: ManagerState, args: argparse.Namespace) -> None:
         if not unavailable and not resource_wait:
             continue
         if item.tier is not None and item.tier < len(TIERS) - 1:
-            run(["scancel", str(item.job_id)], check=False)
+            old_job_id = str(item.job_id)
+            run(["scancel", old_job_id], check=False)
+            for _ in range(15):
+                if job_state(old_job_id) not in LIVE:
+                    break
+                time.sleep(2)
+            if job_state(old_job_id) in LIVE:
+                continue
             item.tier += 1
             item.job_id = None
             item.state = "WAITING"
@@ -508,6 +579,8 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
             for condition in CONDITIONS:
                 key = f"train:{stage.key}:{regime}:{algo}:{condition}"
                 item = record(state, key)
+                if adopt_and_prune_live_job(key, item):
+                    continue
                 if train_done(stage, regime, algo, condition):
                     item.state = "COMPLETED"
                     continue
@@ -522,6 +595,8 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
         for algo in ALGOS:
             key = f"score:{stage.key}:{regime}:{algo}"
             item = record(state, key)
+            if adopt_and_prune_live_job(key, item):
+                continue
             if score_done(stage, regime, algo):
                 item.state = "COMPLETED"
                 continue
