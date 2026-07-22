@@ -10,6 +10,7 @@ from pathlib import Path
 
 LOW_DIM_BY_CONDITION = {
     "image_state": ["robot_state"],
+    "image_proprio": ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"],
     "image": [],
     "state": ["robot_state"],
     "action_prior": ["action_prior_dummy"],
@@ -17,6 +18,7 @@ LOW_DIM_BY_CONDITION = {
 
 RGB_BY_CONDITION = {
     "image_state": ["agentview_image", "robot0_eye_in_hand_image"],
+    "image_proprio": ["agentview_image", "robot0_eye_in_hand_image"],
     "image": ["agentview_image", "robot0_eye_in_hand_image"],
     "state": [],
     "action_prior": [],
