@@ -300,7 +300,9 @@ def report_done(stage: Stage) -> bool:
 def artifact_done(key: str) -> bool:
     parts = key.split(":")
     kind, stage_key = parts[:2]
-    stage = next(item for item in STAGES if item.key == stage_key)
+    stage = next((item for item in STAGES if item.key == stage_key), None)
+    if stage is None:
+        return False
     if kind == "prepare":
         return hdf5_ready(stage)
     if kind == "train":
