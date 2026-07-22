@@ -209,7 +209,7 @@ def prepare_threading(args: argparse.Namespace, output: Path) -> None:
     with h5py.File(output, "w") as dst:
         dst.attrs["env_args"] = env_args
         dst.attrs["source_dataset_root"] = str(args.input)
-        dst.attrs["action_dim"] = 7
+        dst.attrs["action_dim"] = 8
         dst.attrs["observation_keys_json"] = json.dumps(OBS_KEYS)
         data = dst.create_group("data")
         data.attrs["env_args"] = env_args
@@ -220,7 +220,7 @@ def prepare_threading(args: argparse.Namespace, output: Path) -> None:
             with np.load(npz_path, allow_pickle=True) as payload:
                 states = np.asarray(payload["states"], dtype=np.float64)
                 actions = np.asarray([info["actions"] for info in payload["action_infos"]], dtype=np.float32)
-            if states.shape[0] != actions.shape[0] + 1 or actions.ndim != 2 or actions.shape[1] != 7:
+            if states.shape[0] != actions.shape[0] + 1 or actions.ndim != 2 or actions.shape[1] != 8:
                 raise ValueError(f"Invalid state/action shapes in {npz_path}: {states.shape}, {actions.shape}")
             model_xml = (args.input / row["xml"]).read_text()
             env.reset()
@@ -263,8 +263,11 @@ def validate(path: Path) -> None:
         for demo_key in demos:
             demo = handle[f"data/{demo_key}"]
             length = len(demo["actions"])
-            if demo["actions"].shape[1] != 7:
-                raise ValueError(f"{demo_key} action dim is not 7")
+            expected_action_dim = int(handle.attrs["action_dim"])
+            if demo["actions"].shape[1] != expected_action_dim:
+                raise ValueError(
+                    f"{demo_key} action dim {demo['actions'].shape[1]} != {expected_action_dim}"
+                )
             for key in (*OBS_KEYS, "action_prior_dummy"):
                 if key not in demo["obs"] or len(demo[f"obs/{key}"]) != length:
                     raise ValueError(f"{demo_key}/obs/{key} is missing or misaligned")

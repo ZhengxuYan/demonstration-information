@@ -90,10 +90,28 @@ STAGES = (
         score_seed=20260723,
     ),
     Stage(
+        key="d1_8d",
+        dataset_tag="threading_d1_manual200",
+        action_dim=8,
+        source_hdf5=f"{DATA}/threading_d1_joint_position_manual_200_full100_partial100_20260723",
+        hdf5=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_image_proprio_8d.hdf5",
+        manifest=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_manifest.csv",
+        run_prefix="threading_d1_manual200_pomdp_image_proprio_8d",
+        out_root=f"{DATA}/robomimic_outputs/pomdp_image_proprio_20260723",
+        config_root=f"{DATA}/pomdp_image_proprio_20260723/configs",
+        score_root=f"{DATA}/pomdp_image_proprio_20260723/scores/threading_d1_manual200_8d",
+        report_root=f"{DATA}/pomdp_image_proprio_20260723/reports/threading_d1_manual200_8d",
+        title="Threading D1 Manual200 Image + Proprio POMDP Scores - 8D",
+        description="Conditional models use two RGB views and end-effector proprio. Actions are seven absolute joint-position targets plus gripper.",
+        prepare_mode="threading",
+        labels_csv=f"{DATA}/threading_d1_joint_position_manual_200_full100_partial100_20260723/annotations.csv",
+        score_seed=20260723,
+    ),
+    Stage(
         key="d1_7d",
         dataset_tag="threading_d1_manual200",
         action_dim=7,
-        source_hdf5=f"{DATA}/threading_d1_joint_position_manual_200_full100_partial100_20260723",
+        source_hdf5=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_image_proprio_8d.hdf5",
         hdf5=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_image_proprio_7d.hdf5",
         manifest=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_manifest.csv",
         run_prefix="threading_d1_manual200_pomdp_image_proprio_7d",
@@ -101,26 +119,8 @@ STAGES = (
         config_root=f"{DATA}/pomdp_image_proprio_20260723/configs",
         score_root=f"{DATA}/pomdp_image_proprio_20260723/scores/threading_d1_manual200_7d",
         report_root=f"{DATA}/pomdp_image_proprio_20260723/reports/threading_d1_manual200_7d",
-        title="Threading D1 Manual200 Image + Proprio POMDP Scores - 7D",
-        description="Conditional models use two RGB views and end-effector proprio. Actions use dimensions 0-6.",
-        prepare_mode="threading",
-        labels_csv=f"{DATA}/threading_d1_joint_position_manual_200_full100_partial100_20260723/annotations.csv",
-        score_seed=20260723,
-    ),
-    Stage(
-        key="d1_6d",
-        dataset_tag="threading_d1_manual200",
-        action_dim=6,
-        source_hdf5=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_image_proprio_7d.hdf5",
-        hdf5=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_image_proprio_6d.hdf5",
-        manifest=f"{DATA}/pomdp_image_proprio_20260723/threading_d1_manual200_manifest.csv",
-        run_prefix="threading_d1_manual200_pomdp_image_proprio_6d",
-        out_root=f"{DATA}/robomimic_outputs/pomdp_image_proprio_20260723",
-        config_root=f"{DATA}/pomdp_image_proprio_20260723/configs",
-        score_root=f"{DATA}/pomdp_image_proprio_20260723/scores/threading_d1_manual200_6d",
-        report_root=f"{DATA}/pomdp_image_proprio_20260723/reports/threading_d1_manual200_6d",
-        title="Threading D1 Manual200 Image + Proprio POMDP Scores - 6D",
-        description="Conditional models use two RGB views and end-effector proprio. Actions use dimensions 0-5.",
+        title="Threading D1 Manual200 Image + Proprio POMDP Scores - 7D Arm Only",
+        description="Conditional models use two RGB views and end-effector proprio. Actions are the seven absolute arm joint-position targets; gripper is excluded.",
         prepare_mode="subset",
         labels_csv=f"{DATA}/threading_d1_joint_position_manual_200_full100_partial100_20260723/annotations.csv",
         score_seed=20260723,
@@ -371,7 +371,7 @@ def submit_prepare(stage: Stage) -> str:
         command = (
             common + "python scripts/quality/subset_density_hdf5_action_dims.py "
             f"--input {quote(stage.source_hdf5)} --output {quote(stage.hdf5)} "
-            f"--action-dims 0,1,2,3,4,5 --overwrite && "
+            f"--action-dims {quote(','.join(str(idx) for idx in range(stage.action_dim)))} --overwrite && "
             f"python scripts/quality/export_density_hdf5_labels.py --input {quote(stage.hdf5)} "
             f"--output {quote(stage.manifest)}"
         )
