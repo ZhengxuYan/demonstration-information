@@ -213,9 +213,15 @@ def load_state(path: Path) -> ManagerState:
 
 def save_state(path: Path, state: ManagerState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"jobs": {key: asdict(value) for key, value in state.jobs.items()}}, indent=2, sort_keys=True) + "\n")
-    tmp.replace(path)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_text(
+            json.dumps({"jobs": {key: asdict(value) for key, value in state.jobs.items()}}, indent=2, sort_keys=True)
+            + "\n"
+        )
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def record(state: ManagerState, key: str) -> JobRecord:
