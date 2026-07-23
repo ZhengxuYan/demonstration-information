@@ -297,8 +297,10 @@ def main() -> None:
     if args.mc_action_samples <= 0 or args.mc_marginal_states <= 0:
         raise ValueError("MC sample counts must be positive")
     device = torch.device(args.device) if args.device else TorchUtils.get_torch_device(try_to_use_cuda=True)
-    cond_algo, cond_config = load_algo(args.conditional_checkpoint, args.dataset, device)
     prior_algo, _ = load_algo(args.prior_checkpoint, args.dataset, device)
+    # ObsUtils keeps a process-global modality registry. Load the conditional
+    # model last so image keys remain registered after loading the dummy-observation prior.
+    cond_algo, cond_config = load_algo(args.conditional_checkpoint, args.dataset, device)
     action_dim = int(cond_algo.ac_dim)
     action_dims = parse_action_dims(args.action_dims, action_dim)
     action_index = torch.as_tensor(action_dims, dtype=torch.long, device=device)
