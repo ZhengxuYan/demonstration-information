@@ -347,7 +347,12 @@ def run_name(stage: Stage, regime: str, algo: str, condition: str) -> str:
 
 
 def train_done(stage: Stage, regime: str, algo: str, condition: str) -> bool:
-    return (Path(stage.out_root) / run_name(stage, regime, algo, condition) / "TRAIN_DONE").is_file()
+    run_dir = Path(stage.out_root) / run_name(stage, regime, algo, condition)
+    if (run_dir / "TRAIN_DONE").is_file():
+        return True
+    # A full checkpoint is authoritative even if a node-local logging failure
+    # prevents the wrapper from writing its completion sentinel.
+    return any(run_dir.glob("*/models/model_epoch_2000.pth"))
 
 
 def score_path(stage: Stage, regime: str) -> Path:
