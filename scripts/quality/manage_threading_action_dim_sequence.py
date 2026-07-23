@@ -656,7 +656,7 @@ def status_line(state: ManagerState) -> str:
 
 def main() -> None:
     args = parse_args()
-    requested = [value.strip() for value in args.stages.split(",") if value.strip()]
+    requested = [value.strip() for value in re.split(r"[:,]", args.stages) if value.strip()]
     known = {stage.key: stage for stage in STAGES}
     unknown = sorted(set(requested) - set(known))
     if unknown:
