@@ -185,7 +185,11 @@ def flatten_obs(value: torch.Tensor) -> torch.Tensor:
 
 
 def as_device_obs(obs: dict, keys: list[str], device: torch.device) -> dict[str, torch.Tensor]:
-    return {key: flatten_obs(TensorUtils.to_device(obs[key], device).float()) for key in keys}
+    processed = ObsUtils.process_obs_dict({key: obs[key] for key in keys})
+    return {
+        key: flatten_obs(TensorUtils.to_device(processed[key], device).float())
+        for key in keys
+    }
 
 
 def conditional_obs_keys(config) -> list[str]:
@@ -215,8 +219,9 @@ def collect_state_pool(
     )
     observations: dict[str, list[np.ndarray]] = {key: [] for key in obs_keys}
     for batch in loader:
+        processed = ObsUtils.process_obs_dict({key: batch["obs"][key] for key in obs_keys})
         for key in obs_keys:
-            value = flatten_obs(batch["obs"][key].float())
+            value = flatten_obs(processed[key].float())
             observations[key].append(TensorUtils.to_numpy(value).astype(np.float32))
     all_observations = {key: np.concatenate(values, axis=0) for key, values in observations.items()}
     return {
