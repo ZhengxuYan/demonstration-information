@@ -188,7 +188,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(cmd: list[str], check: bool = True) -> str:
-    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check)
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if check and proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        raise RuntimeError(f"command failed: {shlex.join(cmd)}\n{detail}")
     return proc.stdout.strip()
 
 
@@ -568,7 +571,11 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
     if stage.prepare_mode == "subset" and not Path(stage.source_hdf5).is_file():
         return
     if not hdf5_ready(stage) and can_retry(prep, args):
-        submit_record(prep, submit_prepare(stage))
+        try:
+            submit_record(prep, submit_prepare(stage))
+        except RuntimeError as exc:
+            prep.state = "WAITING"
+            print(f"prepare submission deferred for {prep_key}: {exc}", flush=True)
         return
     if not hdf5_ready(stage):
         return
@@ -587,7 +594,14 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
                 if active_gpu_jobs(state) >= args.max_active_gpu:
                     break
                 if can_retry(item, args):
-                    submit_record(item, submit_train(stage, regime, fold_tag, train_key, valid_key, algo, condition, item))
+                    try:
+                        submit_record(
+                            item,
+                            submit_train(stage, regime, fold_tag, train_key, valid_key, algo, condition, item),
+                        )
+                    except RuntimeError as exc:
+                        item.state = "WAITING"
+                        print(f"train submission deferred for {key}: {exc}", flush=True)
 
     refresh(state)
     for regime, _, _, _, filter_key in REGIMES:
@@ -602,7 +616,11 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
                 continue
             pair_done = all(train_done(stage, regime, algo, condition) for condition in CONDITIONS)
             if pair_done and active_gpu_jobs(state) < args.max_active_gpu and can_retry(item, args):
-                submit_record(item, submit_score(stage, regime, fold_tag, filter_key, algo, item))
+                try:
+                    submit_record(item, submit_score(stage, regime, fold_tag, filter_key, algo, item))
+                except RuntimeError as exc:
+                    item.state = "WAITING"
+                    print(f"score submission deferred for {key}: {exc}", flush=True)
 
     all_scores = all(score_done(stage, regime, algo) for regime, *_ in REGIMES for algo in ALGOS)
     report_key = f"report:{stage.key}"
@@ -610,7 +628,11 @@ def ensure_stage(state: ManagerState, stage: Stage, args: argparse.Namespace) ->
     if report_done(stage):
         report.state = "COMPLETED"
     elif all_scores and can_retry(report, args):
-        submit_record(report, submit_report(stage))
+        try:
+            submit_record(report, submit_report(stage))
+        except RuntimeError as exc:
+            report.state = "WAITING"
+            print(f"report submission deferred for {report_key}: {exc}", flush=True)
 
 
 def status_line(state: ManagerState) -> str:
