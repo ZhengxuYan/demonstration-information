@@ -8,6 +8,7 @@ import csv
 import re
 import subprocess
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 
@@ -208,7 +209,6 @@ def main() -> None:
             for job in job_history
             if str(job["restarts"]).isdigit()
         )
-        resume_attempted = bool(resume_epochs or restart_count or len(submission_ids) > 1)
         resume_from: int | str = max(resume_epochs) if resume_epochs else ""
 
         if full_checkpoint:
@@ -220,6 +220,24 @@ def main() -> None:
         else:
             status = "NOT_STARTED"
 
+        latest_history = job_history[-1] if job_history else {}
+        current_job_id = active["job_id"] if active else latest_history.get("job_id", "")
+        elapsed = active["elapsed"] if active else latest_history.get("elapsed", "")
+        start_time = active["start"] if active else latest_history.get("start", "")
+        node_or_reason = (
+            (active["node"] if active["state"] == "RUNNING" else active["reason"])
+            if active
+            else latest_history.get("node", "")
+        )
+
+        try:
+            start_timestamp = datetime.fromisoformat(start_time).timestamp()
+        except (TypeError, ValueError):
+            start_timestamp = 0.0
+        checkpoint_before_start = bool(
+            start_timestamp and any(path.stat().st_mtime < start_timestamp for path in checkpoints)
+        )
+        resume_attempted = bool(resume_epochs or restart_count or checkpoint_before_start)
         if not resume_attempted:
             resume_status = "not_needed"
         elif resume_from != "" and current_epoch != "" and int(current_epoch) > int(resume_from):
@@ -232,16 +250,6 @@ def main() -> None:
             resume_status = "started_not_advanced"
         else:
             resume_status = "unconfirmed"
-
-        latest_history = job_history[-1] if job_history else {}
-        current_job_id = active["job_id"] if active else latest_history.get("job_id", "")
-        elapsed = active["elapsed"] if active else latest_history.get("elapsed", "")
-        start_time = active["start"] if active else latest_history.get("start", "")
-        node_or_reason = (
-            (active["node"] if active["state"] == "RUNNING" else active["reason"])
-            if active
-            else latest_history.get("node", "")
-        )
 
         rows.append(
             {
@@ -256,6 +264,7 @@ def main() -> None:
                 "node_or_reason": node_or_reason,
                 "job_submissions": len(submission_ids),
                 "slurm_restarts": restart_count,
+                "resume_time": start_time if resume_attempted else "",
                 "resume_from_epoch": resume_from,
                 "resume_status": resume_status,
                 "current_epoch": current_epoch,
