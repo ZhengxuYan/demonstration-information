@@ -11,6 +11,7 @@ from pathlib import Path
 LOW_DIM_BY_CONDITION = {
     "image_state": ["robot_state"],
     "image_proprio": ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"],
+    "image_proprio_euler": ["robot0_eef_pos", "robot0_eef_euler", "robot0_gripper_qpos"],
     "image": [],
     "state": ["robot_state"],
     "action_prior": ["action_prior_dummy"],
@@ -19,6 +20,7 @@ LOW_DIM_BY_CONDITION = {
 RGB_BY_CONDITION = {
     "image_state": ["agentview_image", "robot0_eye_in_hand_image"],
     "image_proprio": ["agentview_image", "robot0_eye_in_hand_image"],
+    "image_proprio_euler": ["agentview_image", "robot0_eye_in_hand_image"],
     "image": ["agentview_image", "robot0_eye_in_hand_image"],
     "state": [],
     "action_prior": [],
@@ -45,6 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-filter-key", default="train")
     parser.add_argument("--valid-filter-key", default="valid")
     parser.add_argument("--hdf5-normalize-obs", action="store_true")
+    parser.add_argument(
+        "--disable-rgb-randomizer",
+        action="store_true",
+        help="Encode the complete stored RGB frame without random or center cropping.",
+    )
     parser.add_argument("--gmm-modes", type=int, default=5)
     parser.add_argument("--gaussian-min-std", type=float, default=1e-4)
     parser.add_argument("--gaussian-fixed-std", action="store_true")
@@ -122,12 +129,15 @@ def main() -> None:
     cfg["algo"]["gaussian"]["init_std"] = 0.1
     cfg["algo"]["gaussian"]["min_std"] = float(args.gaussian_min_std)
     cfg["algo"]["gaussian"]["std_activation"] = "softplus"
-    cfg["algo"]["gaussian"]["low_noise_eval"] = True
+    # Density validation and scoring must use the learned variance. Enabling
+    # low_noise_eval forces std=1e-4 in eval mode and makes validation NLL
+    # incomparable with the likelihood used by the scoring scripts.
+    cfg["algo"]["gaussian"]["low_noise_eval"] = False
 
     cfg["algo"]["gmm"]["num_modes"] = int(args.gmm_modes)
     cfg["algo"]["gmm"]["min_std"] = float(args.gaussian_min_std)
     cfg["algo"]["gmm"]["std_activation"] = "softplus"
-    cfg["algo"]["gmm"]["low_noise_eval"] = True
+    cfg["algo"]["gmm"]["low_noise_eval"] = False
 
     cfg["algo"]["discrete"]["num_bins"] = int(args.discrete_bins)
     cfg["algo"]["discrete"]["bin_type"] = "uniform"
@@ -141,6 +151,9 @@ def main() -> None:
     cfg["observation"]["modalities"]["obs"]["scan"] = []
     cfg["observation"]["modalities"]["goal"]["low_dim"] = []
     cfg["observation"]["modalities"]["goal"]["rgb"] = []
+    if args.disable_rgb_randomizer:
+        cfg["observation"]["encoder"]["rgb"]["obs_randomizer_class"] = None
+        cfg["observation"]["encoder"]["rgb"]["obs_randomizer_kwargs"] = {}
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(cfg, indent=4) + "\n")

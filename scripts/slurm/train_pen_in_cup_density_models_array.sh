@@ -43,6 +43,9 @@ LEARNING_RATE="${LEARNING_RATE:-0.0001}"
 L2_REGULARIZATION="${L2_REGULARIZATION:-0.0}"
 ACTOR_LAYER_DIMS="${ACTOR_LAYER_DIMS:-1024,1024}"
 GMM_MODES="${GMM_MODES:-5}"
+GAUSSIAN_MIN_STD="${GAUSSIAN_MIN_STD:-0.0001}"
+VARIANT_TAG="${VARIANT_TAG:-}"
+DISABLE_RGB_RANDOMIZER="${DISABLE_RGB_RANDOMIZER:-0}"
 DISCRETE_BINS="${DISCRETE_BINS:-256}"
 DISCRETE_LOSS_TYPE="${DISCRETE_LOSS_TYPE:-hard_ce}"
 WANDB_PROJECT="${WANDB_PROJECT:-${TASK_TAG}-density}"
@@ -70,15 +73,25 @@ RUN_MIDDLE="${ACTION_TARGET}_${ACTION_SOURCE}_${ACTION_NORMALIZATION}"
 if [[ -n "${FOLD_TAG}" ]]; then
   RUN_MIDDLE="${RUN_MIDDLE}_${FOLD_TAG}"
 fi
+if [[ -n "${VARIANT_TAG}" ]]; then
+  RECIPE_BASE="${RECIPE_BASE}/${VARIANT_TAG}"
+  RUN_MIDDLE="${RUN_MIDDLE}_${VARIANT_TAG}"
+fi
 RUN_NAME="${RUN_PREFIX}_${DATASET_TAG}_${RUN_MIDDLE}_${ALGO}_${CONDITION}_seed1"
 CONFIG="${CONFIG_ROOT}/${DATASET_TAG}/${RECIPE_BASE}/${RUN_NAME}.json"
 RUN_DIR="${OUT_ROOT}/${RUN_NAME}"
-if [[ -d "${RUN_DIR}" ]] && ! find "${RUN_DIR}" -path '*/models/*.pth' -print -quit 2>/dev/null | grep -q .; then
+if [[ -d "${RUN_DIR}" ]] && ! find "${RUN_DIR}" \( -path '*/models/*.pth' -o -path '*/last.pth' -o -path '*/last_bak.pth' \) -print -quit 2>/dev/null | grep -q .; then
   echo "removing failed empty run directory without checkpoints: ${RUN_DIR}"
   rm -rf "${RUN_DIR}"
 fi
+RESUME_REQUESTED="${RESUME:-0}"
+AUTO_RESUME_PARTITION=0
+case "${SLURM_JOB_PARTITION:-}" in
+  iris|iliad-lo|sc-loprio) AUTO_RESUME_PARTITION=1 ;;
+esac
 RESUME_FLAG=()
-if [[ "${RESUME:-0}" == "1" ]] && find "${RUN_DIR}" -path '*/models/last.pth' -print -quit 2>/dev/null | grep -q .; then
+if [[ "${RESUME_REQUESTED}" == "1" || "${AUTO_RESUME_PARTITION}" == "1" ]] && \
+   find "${RUN_DIR}" \( -path '*/last.pth' -o -path '*/models/last.pth' \) -print -quit 2>/dev/null | grep -q .; then
   RESUME_FLAG=(--resume)
 elif [[ -d "${RUN_DIR}" ]]; then
   BACKUP_DIR="${RUN_DIR}.failed_resume_backup.$(date -u +%Y%m%dT%H%M%SZ).${SLURM_JOB_ID:-manual}"
@@ -96,6 +109,11 @@ cd "${REPO}"
 python scripts/setup/patch_robomimic_optional_diffusion.py
 if [[ "${ALGO}" == "discrete" ]]; then
   python scripts/setup/patch_robomimic_discrete_action.py
+fi
+
+RGB_RANDOMIZER_FLAG=()
+if [[ "${DISABLE_RGB_RANDOMIZER}" == "1" ]]; then
+  RGB_RANDOMIZER_FLAG=(--disable-rgb-randomizer)
 fi
 
 python scripts/quality/write_pen_in_cup_density_bc_config.py \
@@ -116,9 +134,11 @@ python scripts/quality/write_pen_in_cup_density_bc_config.py \
   --train-filter-key "${TRAIN_FILTER_KEY}" \
   --valid-filter-key "${VALID_FILTER_KEY}" \
   --gmm-modes "${GMM_MODES}" \
+  --gaussian-min-std "${GAUSSIAN_MIN_STD}" \
   --discrete-bins "${DISCRETE_BINS}" \
   --discrete-loss-type "${DISCRETE_LOSS_TYPE}" \
   --wandb-project "${WANDB_PROJECT}" \
+  "${RGB_RANDOMIZER_FLAG[@]}" \
   ${LOG_WANDB:+--log-wandb}
 
 cd "${REPO}/robomimic"
@@ -139,9 +159,13 @@ echo "train_filter_key=${TRAIN_FILTER_KEY}"
 echo "valid_filter_key=${VALID_FILTER_KEY}"
 echo "algo=${ALGO}"
 echo "condition=${CONDITION}"
+echo "gaussian_min_std=${GAUSSIAN_MIN_STD}"
+echo "variant_tag=${VARIANT_TAG}"
+echo "disable_rgb_randomizer=${DISABLE_RGB_RANDOMIZER}"
 echo "run_name=${RUN_NAME}"
 echo "run_dir=${RUN_DIR}"
-echo "resume_requested=${RESUME:-0}"
+echo "resume_requested=${RESUME_REQUESTED}"
+echo "auto_resume_partition=${AUTO_RESUME_PARTITION}"
 echo "resume_enabled=$([[ ${#RESUME_FLAG[@]} -gt 0 ]] && echo 1 || echo 0)"
 
 TRAIN_LOG="$(mktemp /tmp/${TASK_TAG}_${DATASET_TAG}_${ALGO}_${CONDITION}_train.XXXXXX.log)"
