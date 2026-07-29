@@ -75,9 +75,9 @@ def submit_train(
         "TRAIN_FILTER_KEY": train_key,
         "VALID_FILTER_KEY": valid_key,
         # Existing dual-camera GMM validation optima are at epochs 16-23.
-        # One hundred epochs covers that range while keeping the nine-way
-        # controlled comparison tractable.
-        "NUM_EPOCHS": "100",
+        # Fifty epochs covers over twice that range and gives every input
+        # condition the same optimization budget.
+        "NUM_EPOCHS": "50",
         "BATCH_SIZE": "32",
         "EPOCH_STEPS": "100",
         "VALIDATION_STEPS": "25",
