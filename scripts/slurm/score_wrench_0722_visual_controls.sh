@@ -63,7 +63,8 @@ for condition in "${CONDITIONS[@]}"; do
     COND_CKPT="${BOTH_CKPT}"
   else
     COND_CKPT="$(python3 scripts/quality/select_robomimic_checkpoint.py \
-      --run-dir "$(run_dir "${condition}")" --mode best_validation)"
+      --run-dir "$(run_dir "${condition}")" --mode best_validation \
+      --max-epoch 100)"
   fi
   condition_root="${SCORE_ROOT}/${condition}"
   REPO="${REPO}" \

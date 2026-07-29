@@ -16,6 +16,11 @@ def parse_args() -> argparse.Namespace:
         choices=["best_validation", "latest_epoch", "last"],
         default="best_validation",
     )
+    parser.add_argument(
+        "--max-epoch",
+        type=int,
+        help="Ignore model_epoch checkpoints above this epoch.",
+    )
     return parser.parse_args()
 
 
@@ -31,6 +36,12 @@ def checkpoints(run_dir: Path) -> list[Path]:
 def main() -> None:
     args = parse_args()
     ckpts = checkpoints(args.run_dir)
+    if args.max_epoch is not None:
+        ckpts = [
+            path
+            for path in ckpts
+            if epoch(path) < 0 or epoch(path) <= args.max_epoch
+        ]
     if not ckpts:
         raise FileNotFoundError(f"No checkpoints under {args.run_dir}")
 
