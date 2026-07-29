@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temporal-shift-fraction", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=20260725)
     parser.add_argument("--device")
+    parser.add_argument("--max-batches", type=int)
     return parser.parse_args()
 
 
@@ -164,11 +165,13 @@ def main() -> None:
 
     rows: list[dict[str, object]] = []
     with torch.no_grad():
-        for target_batch, shuffled_batch, temporal_batch in tqdm(
+        for batch_index, (target_batch, shuffled_batch, temporal_batch) in enumerate(tqdm(
             zip(target_loader, shuffled_loader, temporal_loader),
             total=len(target_loader),
             desc="image counterfactuals",
-        ):
+        )):
+            if args.max_batches is not None and batch_index >= args.max_batches:
+                break
             local_indices = np.asarray(TensorUtils.to_numpy(target_batch["index"])).astype(int)
             batch_ep, batch_step = index_metadata(dataset, local_indices)
             actions = flatten_actions(
@@ -222,6 +225,7 @@ def main() -> None:
         "variants": list(VARIANTS),
         "episodes": len(episode_rows),
         "transitions": len(rows),
+        "max_batches": args.max_batches,
         "finite": True,
     }
     args.output.mkdir(parents=True, exist_ok=True)
