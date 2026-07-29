@@ -732,6 +732,13 @@ def main() -> None:
     if enriched.middle_frame.isna().any():
         raise ValueError("Missing middle_frame for one or more episodes")
     enriched["day"] = enriched.episode.str.split("_", n=1).str[0]
+    expected_labels = {1: 60, 2: 85, 3: 155}
+    observed_labels = enriched.label.value_counts().sort_index().to_dict()
+    if len(enriched) != 300 or observed_labels != expected_labels:
+        raise ValueError(
+            f"Unexpected manifest coverage: episodes={len(enriched)}, "
+            f"labels={observed_labels}"
+        )
     write_csv(args.output / "manifest_enriched.csv", enriched)
 
     association = []
@@ -922,6 +929,81 @@ def main() -> None:
         & (association_frame.source == "baseline")
     ]
     max_baseline_rho = float(baseline_gmm.spearman.abs().max())
+    heldout_aggregation = aggregation_stats[
+        aggregation_stats.regime == "2fold"
+    ]
+    strongest_heldout_aggregation = heldout_aggregation.loc[
+        heldout_aggregation.spearman.abs().idxmax()
+    ]
+    heldout_counterfactual = counterfactual[
+        counterfactual.regime == "2fold"
+    ]
+    counterfactual_means = {
+        column: float(heldout_counterfactual[column].mean())
+        for column in delta_values
+    }
+    counterfactual_rhos = {
+        column: float(
+            spearmanr(
+                heldout_counterfactual[column],
+                heldout_counterfactual.label,
+            ).statistic
+        )
+        for column in delta_values
+    }
+    root_causes = pd.DataFrame(
+        [
+            {
+                "hypothesis": "Numerical instability",
+                "status": "not supported",
+                "evidence": "All GMM episode, transition, phase, and counterfactual values are finite.",
+            },
+            {
+                "hypothesis": "The conditional model ignores images",
+                "status": "not supported",
+                "evidence": (
+                    "Held-out mean log-likelihood drops after image perturbation: "
+                    + ", ".join(
+                        f"{key.removeprefix('delta_')}={value:.2f}"
+                        for key, value in counterfactual_means.items()
+                    )
+                    + " nats/transition."
+                ),
+            },
+            {
+                "hypothesis": "Whole-episode averaging hides a stable phase signal",
+                "status": "weak evidence only",
+                "evidence": (
+                    f"Best exploratory held-out aggregation is "
+                    f"{strongest_heldout_aggregation.aggregation}/"
+                    f"{strongest_heldout_aggregation.score}, "
+                    f"rho={strongest_heldout_aggregation.spearman:+.3f}; "
+                    "windows were not selected on an independent label set."
+                ),
+            },
+            {
+                "hypothesis": "Image dependence tracks the observability label",
+                "status": "not supported",
+                "evidence": (
+                    "Held-out image-perturbation Spearman values are "
+                    + ", ".join(
+                        f"{key.removeprefix('delta_')}={value:+.3f}"
+                        for key, value in counterfactual_rhos.items()
+                    )
+                    + "."
+                ),
+            },
+            {
+                "hypothesis": "Density signal and label target are misaligned",
+                "status": "supported",
+                "evidence": (
+                    f"Stable-GMM score components have max |rho|={max_baseline_rho:.3f}; "
+                    "the model uses images, but image dependence is nearly label-independent."
+                ),
+            },
+        ]
+    )
+    write_csv(args.output / "root_cause_evidence.csv", root_causes)
 
     findings = [
         f"Existing GMM scores remain weak: maximum absolute Spearman is {max_baseline_rho:.3f}.",
@@ -967,6 +1049,7 @@ th:first-child,td:first-child{{text-align:left}}iframe{{width:100%;height:900px;
 <h1>Wrench 0722 score root-cause analysis</h1>
 <div class="meta">300 episodes · labels 1 partial, 2 intermediate, 3 full · GMM 5 modes · min_std=0.01 · normal and held-out 2-fold</div>
 <h2>Findings</h2><div class="findings"><ul>{''.join(f'<li>{html.escape(item)}</li>' for item in findings)}</ul></div>
+<h2>Root-cause evidence</h2><div class="panel">{root_causes.to_html(index=False, escape=True, border=0)}</div>
 <h2>Existing score decomposition</h2><div class="panel"><img src="score_component_associations.png"></div>
 <h2>Episode aggregation and task phase</h2><div class="grid"><div class="panel"><img src="phase_associations.png"></div>
 <div class="panel">{html_table(aggregation_summary.head(20), ['regime','score','aggregation','spearman','auc_label1_vs3'])}</div></div>
@@ -980,6 +1063,7 @@ th:first-child,td:first-child{{text-align:left}}iframe{{width:100%;height:900px;
 <a href="episode_analysis.csv">episode analysis</a><a href="transition_analysis.csv">transition analysis</a>
 <a href="phase_analysis.csv">phase analysis</a><a href="camera_ablation.csv">camera ablation</a>
 <a href="association_metrics.csv">association metrics</a><a href="manifest_enriched.csv">enriched manifest</a>
+<a href="root_cause_evidence.csv">root-cause evidence</a>
 </div></main></body></html>"""
     (args.output / "index.html").write_text(body)
     print(args.output / "index.html")
