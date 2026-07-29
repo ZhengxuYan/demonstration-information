@@ -89,13 +89,15 @@ fi
 cd "${REPO}/robomimic"
 export USE_FLAX=0
 export PYTHONPATH="${PWD}:${REPO}/scripts/quality:${PYTHONPATH:-}"
-python "${REPO}/scripts/quality/score_wrench_0722_image_counterfactuals.py" \
-  --checkpoint "${BOTH_CKPT}" \
-  --dataset "${DATASET_HDF5}" \
-  --manifest "${MANIFEST}" \
-  --filter-key "${FILTER_KEY}" \
-  --output "${counterfactual_root}" \
-  --seed "${SEED}"
+if [[ ! -s "${counterfactual_root}/episode_image_counterfactuals.csv" ]]; then
+  python "${REPO}/scripts/quality/score_wrench_0722_image_counterfactuals.py" \
+    --checkpoint "${BOTH_CKPT}" \
+    --dataset "${DATASET_HDF5}" \
+    --manifest "${MANIFEST}" \
+    --filter-key "${FILTER_KEY}" \
+    --output "${counterfactual_root}" \
+    --seed "${SEED}"
+fi
 
 marker="${SCORE_ROOT}/gmm/${REGIME}"
 mkdir -p "${marker}"
