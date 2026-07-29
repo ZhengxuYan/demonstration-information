@@ -196,6 +196,13 @@ def trimmed_mean(values: pd.Series) -> float:
     return float(array[trim : len(array) - trim].mean()) if trim else float(array.mean())
 
 
+def sliding_extreme(values: pd.Series, window: int = 31) -> tuple[float, float]:
+    array = np.asarray(values, dtype=float)
+    width = min(window, len(array))
+    means = np.convolve(array, np.ones(width) / width, mode="valid")
+    return float(means.max()), float(means.min())
+
+
 def build_phase_rows(
     samples: pd.DataFrame,
     manifest: pd.DataFrame,
@@ -246,6 +253,7 @@ def build_phase_rows(
             "middle_local_step": middle_local,
         }
         for score in SCORES:
+            sliding_max, sliding_min = sliding_extreme(group[score])
             episode_rows.extend(
                 [
                     {
@@ -265,6 +273,18 @@ def build_phase_rows(
                         "score": score,
                         "aggregation": "trim10",
                         "value": trimmed_mean(group[score]),
+                    },
+                    {
+                        **base,
+                        "score": score,
+                        "aggregation": "sliding31_max",
+                        "value": sliding_max,
+                    },
+                    {
+                        **base,
+                        "score": score,
+                        "aggregation": "sliding31_min",
+                        "value": sliding_min,
                     },
                 ]
             )
@@ -364,6 +384,36 @@ def build_counterfactual_rows(root: Path, manifest: pd.DataFrame) -> pd.DataFram
         frame["regime"] = regime
         frame = frame.merge(manifest, on="ep_idx", validate="one_to_one")
         frame["day"] = frame.episode.str.split("_", n=1).str[0]
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
+def build_counterfactual_transition_rows(
+    root: Path, manifest: pd.DataFrame
+) -> pd.DataFrame:
+    frames = []
+    for regime in REGIMES:
+        if regime == "normal":
+            frame = pd.read_csv(
+                root
+                / "image_counterfactual/normal/transition_image_counterfactuals.csv"
+            )
+        else:
+            frame = pd.concat(
+                [
+                    pd.read_csv(
+                        root
+                        / f"image_counterfactual/{fold}/"
+                        "transition_image_counterfactuals.csv"
+                    )
+                    for fold in ("fold0", "fold1")
+                ],
+                ignore_index=True,
+            )
+            if frame.duplicated(["ep_idx", "step_idx"]).any():
+                raise ValueError("Counterfactual transition folds overlap")
+        frame["regime"] = regime
+        frame = frame.merge(manifest, on="ep_idx", validate="many_to_one")
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
 
@@ -483,6 +533,108 @@ def html_table(frame: pd.DataFrame, columns: list[str], digits: int = 3) -> str:
     return shown.to_html(index=False, escape=True, border=0)
 
 
+def build_transition_review(
+    transitions: pd.DataFrame,
+    episode_aggregation: pd.DataFrame,
+    output: Path,
+    video_root: Path,
+    per_tail: int = 2,
+) -> None:
+    episode_mean = episode_aggregation[
+        episode_aggregation.aggregation == "mean"
+    ]
+    selections = []
+    for (regime, score), group in episode_mean.groupby(["regime", "score"]):
+        selections.extend(
+            group[group.label == 1]
+            .nlargest(per_tail, "value")
+            .assign(case="high-score label 1")
+            [["regime", "score", "ep_idx", "case"]]
+            .to_dict("records")
+        )
+        selections.extend(
+            group[group.label == 3]
+            .nsmallest(per_tail, "value")
+            .assign(case="low-score label 3")
+            [["regime", "score", "ep_idx", "case"]]
+            .to_dict("records")
+        )
+    selection_frame = pd.DataFrame(selections)
+    selected = sorted(selection_frame.ep_idx.unique())
+    trace_columns = [
+        *SCORES,
+        "log_prior_data",
+        "log_mc_marginal_data",
+        "visual_gain_exterior_proprio_euler",
+        "visual_gain_wrist_proprio_euler",
+        "visual_gain_image_proprio_euler",
+        "delta_shuffle_exterior",
+        "delta_shuffle_wrist",
+        "delta_shuffle_both",
+        "delta_temporal_shift",
+    ]
+    rows = []
+    for (regime, ep_idx), group in transitions[
+        transitions.ep_idx.isin(selected)
+    ].groupby(["regime", "ep_idx"]):
+        group = group.sort_values("step_idx")
+        available = [
+            column for column in trace_columns if column in group and group[column].notna().any()
+        ]
+        rows.append(
+            {
+                "regime": regime,
+                "ep_idx": int(ep_idx),
+                "episode": str(group.episode.iloc[0]),
+                "label": int(group.label.iloc[0]),
+                "video": f"video_review/videos/ep_{int(ep_idx):03d}.mp4",
+                "steps": group.step_idx.astype(int).tolist(),
+                "traces": {
+                    column: group[column].astype(float).round(6).tolist()
+                    for column in available
+                },
+                "selections": selection_frame[
+                    (selection_frame.regime == regime)
+                    & (selection_frame.ep_idx == ep_idx)
+                ][["score", "case"]].to_dict("records"),
+            }
+        )
+    missing = [
+        row["ep_idx"]
+        for row in rows
+        if not (video_root / f"ep_{row['ep_idx']:03d}.mp4").is_file()
+    ]
+    if missing:
+        raise ValueError(f"Missing selected review videos: {missing}")
+    payload = json.dumps(
+        {"rows": rows, "scores": list(SCORES), "traces": trace_columns},
+        separators=(",", ":"),
+    )
+    page = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;font:13px Arial;color:#17201d;background:#f4f6f4}.bar{position:sticky;top:0;background:white;padding:10px;border-bottom:1px solid #ccd5cf;z-index:2}
+select{margin-right:10px;padding:5px}.list{padding:10px;display:grid;gap:12px}.card{background:white;border:1px solid #d7ddd9;padding:10px}.top{display:grid;grid-template-columns:42% 1fr;gap:12px}
+video{width:100%;aspect-ratio:32/9;background:#111}.trace{margin-bottom:7px}.name{font-size:11px;color:#5c6b63}svg{display:block;width:100%;height:70px;background:#fafbfa}
+.line{fill:none;stroke:#16708f;stroke-width:1.8}.head{stroke:#111}.meta{color:#5c6b63;margin:5px 0}@media(max-width:850px){.top{grid-template-columns:1fr}}</style></head>
+<body><div class="bar">Regime <select id="regime"><option>normal</option><option>2fold</option></select>
+Selection score <select id="score"></select></div><div id="list" class="list"></div><script>
+const DATA=__PAYLOAD__; const score=document.querySelector("#score"), regime=document.querySelector("#regime");
+DATA.scores.forEach(x=>score.add(new Option(x,x)));
+const fmt=x=>Number.isFinite(x)?x.toFixed(3):"";
+function chart(values,name){const finite=values.filter(Number.isFinite),lo=Math.min(...finite),hi=Math.max(...finite),span=hi-lo||1;
+ const pts=values.map((v,i)=>`${i/(values.length-1||1)*700},${64-(v-lo)/span*58}`).join(" ");
+ return `<div class="trace"><div class="name">${name} · ${fmt(lo)} to ${fmt(hi)}</div><svg viewBox="0 0 700 70"><polyline class="line" points="${pts}"/><line class="head" y1="0" y2="70"/></svg></div>`}
+function render(){const rows=DATA.rows.filter(r=>r.regime===regime.value&&r.selections.some(s=>s.score===score.value));
+ document.querySelector("#list").innerHTML=rows.map(r=>`<div class="card"><b>ep ${r.ep_idx} · label ${r.label}</b><div class="meta">${r.episode} · ${r.selections.map(x=>x.score+" / "+x.case).join(", ")}</div>
+ <div class="top"><video controls preload="metadata" src="${r.video}"></video><div>${Object.entries(r.traces).map(([n,v])=>chart(v,n)).join("")}</div></div></div>`).join("");
+ document.querySelectorAll(".card").forEach(card=>{const v=card.querySelector("video"),heads=card.querySelectorAll(".head");
+ v.addEventListener("timeupdate",()=>{const x=v.duration?v.currentTime/v.duration*700:0;heads.forEach(h=>{h.setAttribute("x1",x);h.setAttribute("x2",x)})})})}
+score.onchange=regime.onchange=render;render();</script></body></html>""".replace(
+        "__PAYLOAD__", payload
+    )
+    (output / "controlled_transition_review.html").write_text(page)
+
+
 def write_csv(path: Path, frame: pd.DataFrame) -> None:
     frame.to_csv(path, index=False, quoting=csv.QUOTE_MINIMAL)
 
@@ -506,6 +658,7 @@ def main() -> None:
     association = []
     phase_frames = []
     episode_aggregation_frames = []
+    baseline_transition_frames = []
     with h5py.File(args.dataset, "r") as hdf5:
         for algo in ("gaussian", "gmm"):
             for regime in REGIMES:
@@ -524,9 +677,16 @@ def main() -> None:
                     )
                 )
                 if algo == "gmm":
-                    samples = read_score(
-                        args.baseline_score_root, algo, regime, sample=True
+                    samples = add_components(
+                        read_score(
+                            args.baseline_score_root, algo, regime, sample=True
+                        )
                     )
+                    baseline_transition = samples.merge(
+                        enriched, on="ep_idx", validate="many_to_one"
+                    )
+                    baseline_transition["regime"] = regime
+                    baseline_transition_frames.append(baseline_transition)
                     episode_agg, phase = build_phase_rows(
                         samples, enriched, labels, hdf5, algo, regime
                     )
@@ -536,10 +696,42 @@ def main() -> None:
     association_frame = pd.DataFrame(association)
     episode_aggregation = pd.concat(episode_aggregation_frames, ignore_index=True)
     phase_frame = pd.concat(phase_frames, ignore_index=True)
+    baseline_transition = pd.concat(
+        baseline_transition_frames, ignore_index=True
+    )
     transition_control, episode_control = build_control_rows(
         args.control_score_root, enriched
     )
     counterfactual = build_counterfactual_rows(args.control_score_root, enriched)
+    counterfactual_transition = build_counterfactual_transition_rows(
+        args.control_score_root, enriched
+    )
+    transition_analysis = baseline_transition.merge(
+        transition_control.drop(
+            columns=[
+                column
+                for column in enriched.columns
+                if column in transition_control and column != "ep_idx"
+            ]
+        ),
+        on=["regime", "ep_idx", "step_idx"],
+        validate="one_to_one",
+    ).merge(
+        counterfactual_transition[
+            [
+                "regime",
+                "ep_idx",
+                "step_idx",
+                *[
+                    column
+                    for column in counterfactual_transition
+                    if column.startswith("delta_")
+                ],
+            ]
+        ],
+        on=["regime", "ep_idx", "step_idx"],
+        validate="one_to_one",
+    )
 
     aggregation_stats = []
     for (regime, score, aggregation), group in episode_aggregation.groupby(
@@ -602,14 +794,14 @@ def main() -> None:
     finite_frames = [
         episode_aggregation.select_dtypes(include=[np.number]),
         phase_frame.select_dtypes(include=[np.number]),
-        transition_control.select_dtypes(include=[np.number]),
+        transition_analysis.select_dtypes(include=[np.number]),
         counterfactual.select_dtypes(include=[np.number]),
     ]
     if any(not np.isfinite(frame.to_numpy()).all() for frame in finite_frames):
         raise ValueError("Non-finite value in report inputs")
 
     write_csv(args.output / "episode_analysis.csv", episode_aggregation)
-    write_csv(args.output / "transition_analysis.csv", transition_control)
+    write_csv(args.output / "transition_analysis.csv", transition_analysis)
     write_csv(args.output / "phase_analysis.csv", phase_frame)
     write_csv(args.output / "camera_ablation.csv", counterfactual)
     write_csv(args.output / "association_metrics.csv", all_associations)
@@ -625,6 +817,12 @@ def main() -> None:
             args.video_review,
             args.output / "video_review",
             dirs_exist_ok=True,
+        )
+        build_transition_review(
+            transition_analysis,
+            episode_aggregation,
+            args.output,
+            args.output / "video_review/videos",
         )
 
     best_control = control_stats.loc[
@@ -693,7 +891,8 @@ th:first-child,td:first-child{{text-align:left}}iframe{{width:100%;height:900px;
 <div class="panel">{html_table(controls_summary, ['regime','value','spearman','auc_label1_vs3','auc_ci_low','auc_ci_high'])}</div></div>
 <h2>Image counterfactuals</h2><div class="grid"><div class="panel"><img src="image_counterfactuals.png"></div>
 <div class="panel">{html_table(camera_summary, ['regime','value','spearman','auc_label1_vs3','auc_ci_low','auc_ci_high'])}</div></div>
-<h2>Transition review</h2><iframe src="video_review/index.html"></iframe>
+<h2>Controlled transition review</h2><iframe src="controlled_transition_review.html"></iframe>
+<h2>Original six-score review</h2><iframe src="video_review/index.html"></iframe>
 <h2>Data</h2><div class="panel links">
 <a href="episode_analysis.csv">episode analysis</a><a href="transition_analysis.csv">transition analysis</a>
 <a href="phase_analysis.csv">phase analysis</a><a href="camera_ablation.csv">camera ablation</a>
