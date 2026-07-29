@@ -8,9 +8,11 @@ import csv
 import html
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import h5py
+import imageio_ffmpeg
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -543,6 +545,7 @@ def build_transition_review(
     episode_aggregation: pd.DataFrame,
     output: Path,
     video_root: Path,
+    dataset: Path,
     per_tail: int = 2,
 ) -> None:
     episode_mean = episode_aggregation[
@@ -604,13 +607,22 @@ def build_transition_review(
                 ][["score", "case"]].to_dict("records"),
             }
         )
-    missing = [
-        row["ep_idx"]
-        for row in rows
-        if not (video_root / f"ep_{row['ep_idx']:03d}.mp4").is_file()
-    ]
+    video_root.mkdir(parents=True, exist_ok=True)
+    missing = sorted(
+        {
+            row["ep_idx"]
+            for row in rows
+            if not (video_root / f"ep_{row['ep_idx']:03d}.mp4").is_file()
+        }
+    )
     if missing:
-        raise ValueError(f"Missing selected review videos: {missing}")
+        with h5py.File(dataset, "r") as hdf5:
+            for ep_idx in missing:
+                render_review_video(
+                    hdf5,
+                    ep_idx,
+                    video_root / f"ep_{ep_idx:03d}.mp4",
+                )
     payload = json.dumps(
         {"rows": rows, "scores": list(SCORES), "traces": trace_columns},
         separators=(",", ":"),
@@ -638,6 +650,66 @@ score.onchange=regime.onchange=render;render();</script></body></html>""".replac
         "__PAYLOAD__", payload
     )
     (output / "controlled_transition_review.html").write_text(page)
+
+
+def render_review_video(
+    hdf5: h5py.File,
+    ep_idx: int,
+    output: Path,
+    fps: float = 15.0,
+) -> None:
+    demo = hdf5[f"data/demo_{ep_idx}"]
+    exterior = demo["obs/agentview_image"]
+    wrist = demo["obs/robot0_eye_in_hand_image"]
+    if exterior.shape != wrist.shape:
+        raise ValueError(f"demo_{ep_idx}: camera shape mismatch")
+    frames, height, width, channels = exterior.shape
+    if channels != 3:
+        raise ValueError(f"demo_{ep_idx}: expected RGB images")
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width * 2}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "22",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    for index in range(frames):
+        frame = np.concatenate([exterior[index], wrist[index]], axis=1)
+        process.stdin.write(np.ascontiguousarray(frame).tobytes())
+    process.stdin.close()
+    stderr = (
+        process.stderr.read().decode("utf-8", errors="replace")
+        if process.stderr
+        else ""
+    )
+    if process.wait():
+        raise RuntimeError(f"ffmpeg failed for demo_{ep_idx}:\n{stderr[-2000:]}")
 
 
 def write_csv(path: Path, frame: pd.DataFrame) -> None:
@@ -833,6 +905,7 @@ def main() -> None:
             episode_aggregation,
             args.output,
             args.output / "video_review/videos",
+            args.dataset,
         )
 
     best_control = control_stats.loc[
