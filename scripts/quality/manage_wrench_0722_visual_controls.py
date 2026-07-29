@@ -74,7 +74,10 @@ def submit_train(
         "FOLD_TAG": fold_tag,
         "TRAIN_FILTER_KEY": train_key,
         "VALID_FILTER_KEY": valid_key,
-        "NUM_EPOCHS": "2000",
+        # Existing dual-camera GMM validation optima are at epochs 16-23.
+        # One hundred epochs covers that range while keeping the nine-way
+        # controlled comparison tractable.
+        "NUM_EPOCHS": "100",
         "BATCH_SIZE": "32",
         "EPOCH_STEPS": "100",
         "VALIDATION_STEPS": "25",
