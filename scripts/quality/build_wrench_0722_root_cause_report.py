@@ -915,14 +915,20 @@ def main() -> None:
             args.dataset,
         )
 
-    best_control = control_stats.loc[
-        control_stats.auc_label1_vs3.sub(0.5).abs().idxmax()
+    aggregate_control_stats = control_stats[
+        control_stats.source == "controlled_condition"
+    ]
+    best_control = aggregate_control_stats.loc[
+        aggregate_control_stats.auc_label1_vs3.sub(0.5).abs().idxmax()
     ]
     strongest_phase = aggregation_stats.loc[
         aggregation_stats.spearman.abs().idxmax()
     ]
-    strongest_counterfactual = counterfactual_stats.loc[
-        counterfactual_stats.auc_label1_vs3.sub(0.5).abs().idxmax()
+    aggregate_counterfactual_stats = counterfactual_stats[
+        counterfactual_stats.source == "image_counterfactual"
+    ]
+    strongest_counterfactual = aggregate_counterfactual_stats.loc[
+        aggregate_counterfactual_stats.auc_label1_vs3.sub(0.5).abs().idxmax()
     ]
     baseline_gmm = association_frame[
         (association_frame.algo == "gmm")
