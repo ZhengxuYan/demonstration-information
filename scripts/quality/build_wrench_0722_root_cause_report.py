@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--labels-csv", type=Path, required=True)
     parser.add_argument("--baseline-score-root", type=Path, required=True)
+    parser.add_argument(
+        "--gmm-score-root",
+        type=Path,
+        help="Stable min-std GMM scores; defaults to baseline-score-root.",
+    )
     parser.add_argument("--control-score-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -641,6 +646,8 @@ def write_csv(path: Path, frame: pd.DataFrame) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.gmm_score_root is None:
+        args.gmm_score_root = args.baseline_score_root
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = pd.read_csv(args.manifest)
     labels = pd.read_csv(args.labels_csv)
@@ -661,9 +668,12 @@ def main() -> None:
     baseline_transition_frames = []
     with h5py.File(args.dataset, "r") as hdf5:
         for algo in ("gaussian", "gmm"):
+            score_root = (
+                args.gmm_score_root if algo == "gmm" else args.baseline_score_root
+            )
             for regime in REGIMES:
                 episode = add_components(
-                    read_score(args.baseline_score_root, algo, regime, sample=False)
+                    read_score(score_root, algo, regime, sample=False)
                 ).merge(enriched, on="ep_idx", validate="one_to_one")
                 association.extend(
                     association_rows(
@@ -679,7 +689,7 @@ def main() -> None:
                 if algo == "gmm":
                     samples = add_components(
                         read_score(
-                            args.baseline_score_root, algo, regime, sample=True
+                            score_root, algo, regime, sample=True
                         )
                     )
                     baseline_transition = samples.merge(

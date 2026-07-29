@@ -139,6 +139,7 @@ def submit_report(stage: manager.Stage) -> str:
         f"--manifest {manager.quote(stage.manifest)} "
         f"--labels-csv {manager.quote(stage.labels_csv)} "
         f"--baseline-score-root {manager.quote(ROOT + '/snapshot_20260727_0700_cst/baseline_1e-4/best_validation/scores')} "
+        f"--gmm-score-root {manager.quote(ROOT + '/snapshot_20260727_0700_cst/gmm_1e-2/best_validation/scores')} "
         f"--control-score-root {manager.quote(stage.score_root)} "
         f"--output {manager.quote(stage.report_root)}"
     )
