@@ -12,5 +12,7 @@
 
 set -euo pipefail
 REPO="${REPO:-/iris/u/jasonyan/repos/demonstration-information}"
+source /iris/u/jasonyan/miniforge3/etc/profile.d/conda.sh
+conda activate "${CONDA_ENV:-openx}"
 cd "${REPO}"
 python3 scripts/quality/manage_wrench_0722_visual_controls.py "$@"
