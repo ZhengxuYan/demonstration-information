@@ -1,0 +1,262 @@
+{
+    "algo_name": "bc",
+    "experiment": {
+        "name": "density_recipe_threading_d0_absolute_d0_final200_joint_absolute_single_image_proprio_none_zscore_linear_gaussian_action_prior_seed1",
+        "validate": true,
+        "logging": {
+            "terminal_output_to_txt": true,
+            "log_tb": true,
+            "log_wandb": false,
+            "wandb_proj_name": "density-normalization-covariance"
+        },
+        "provenance": {
+            "code_version": "036f93d14fbec946fb9c87a5cefe522cc478f87a-dirty",
+            "regime": "normal"
+        },
+        "save": {
+            "enabled": true,
+            "every_n_seconds": null,
+            "every_n_epochs": 200,
+            "epochs": [],
+            "on_best_validation": true,
+            "on_best_rollout_return": false,
+            "on_best_rollout_success_rate": false
+        },
+        "epoch_every_n_steps": 100,
+        "validation_epoch_every_n_steps": 25,
+        "env": null,
+        "additional_envs": null,
+        "render": false,
+        "render_video": false,
+        "keep_all_videos": false,
+        "video_skip": 5,
+        "rollout": {
+            "enabled": false,
+            "n": 50,
+            "horizon": 400,
+            "rate": 50,
+            "warmstart": 0,
+            "terminate_on_success": true
+        },
+        "env_meta_update_dict": {},
+        "ckpt_path": null
+    },
+    "train": {
+        "data": [
+            {
+                "path": "/iris/u/jasonyan/data/threading_d0_final200_abs_delta_20260730/hdf5/image_final200_joint_absolute_fixedobs.hdf5"
+            }
+        ],
+        "output_dir": "/iris/u/jasonyan/data/density_normalization_covariance_exactbest_20260805/models/threading_d0_absolute",
+        "normalize_weights_by_ds_size": false,
+        "num_data_workers": 0,
+        "hdf5_cache_mode": "low_dim",
+        "hdf5_use_swmr": true,
+        "hdf5_load_next_obs": false,
+        "hdf5_normalize_obs": false,
+        "hdf5_filter_key": "train",
+        "hdf5_validation_filter_key": "valid",
+        "seq_length": 1,
+        "pad_seq_length": true,
+        "frame_stack": 1,
+        "pad_frame_stack": true,
+        "dataset_keys": [
+            "actions"
+        ],
+        "action_keys": [
+            "actions"
+        ],
+        "action_config": {
+            "actions": {
+                "normalization": "zscore"
+            }
+        },
+        "action_transform": {
+            "type": "zscore",
+            "scale_floor": 1e-06
+        },
+        "goal_mode": null,
+        "cuda": true,
+        "batch_size": 128,
+        "num_epochs": 2000,
+        "seed": 1,
+        "max_grad_norm": null
+    },
+    "algo": {
+        "optim_params": {
+            "policy": {
+                "optimizer_type": "adam",
+                "learning_rate": {
+                    "initial": 0.0001,
+                    "decay_factor": 0.1,
+                    "epoch_schedule": [],
+                    "scheduler_type": "multistep"
+                },
+                "regularization": {
+                    "L2": 0.0
+                },
+                "num_train_batches": 100,
+                "num_epochs": 2000
+            }
+        },
+        "loss": {
+            "l2_weight": 1.0,
+            "l1_weight": 0.0,
+            "cos_weight": 0.0
+        },
+        "actor_layer_dims": [
+            1024,
+            1024
+        ],
+        "gaussian": {
+            "enabled": true,
+            "fixed_std": false,
+            "init_std": 0.1,
+            "min_std": 0.01,
+            "std_activation": "softplus",
+            "low_noise_eval": false,
+            "mean_squash": "none",
+            "covariance_type": "diag"
+        },
+        "gmm": {
+            "enabled": false,
+            "num_modes": 5,
+            "min_std": 0.01,
+            "std_activation": "softplus",
+            "low_noise_eval": false,
+            "mean_squash": "none",
+            "covariance_type": "diag"
+        },
+        "flow": {
+            "enabled": false,
+            "num_blocks": 6,
+            "hidden_dim": 256,
+            "context_dim": 256,
+            "scale_limit": 2.0
+        },
+        "vae": {
+            "enabled": false,
+            "latent_dim": 14,
+            "latent_clip": null,
+            "kl_weight": 1.0,
+            "decoder": {
+                "is_conditioned": true,
+                "reconstruction_sum_across_elements": false
+            },
+            "prior": {
+                "learn": false,
+                "is_conditioned": false,
+                "use_gmm": false,
+                "gmm_num_modes": 10,
+                "gmm_learn_weights": false,
+                "use_categorical": false,
+                "categorical_dim": 10,
+                "categorical_gumbel_softmax_hard": false,
+                "categorical_init_temp": 1.0,
+                "categorical_temp_anneal_step": 0.001,
+                "categorical_min_temp": 0.3
+            },
+            "encoder_layer_dims": [
+                300,
+                400
+            ],
+            "decoder_layer_dims": [
+                300,
+                400
+            ],
+            "prior_layer_dims": [
+                300,
+                400
+            ]
+        },
+        "rnn": {
+            "enabled": false,
+            "horizon": 10,
+            "hidden_dim": 400,
+            "rnn_type": "LSTM",
+            "num_layers": 2,
+            "open_loop": false,
+            "kwargs": {
+                "bidirectional": false
+            }
+        },
+        "transformer": {
+            "enabled": false,
+            "context_length": 10,
+            "embed_dim": 512,
+            "num_layers": 6,
+            "num_heads": 8,
+            "emb_dropout": 0.1,
+            "attn_dropout": 0.1,
+            "block_output_dropout": 0.1,
+            "sinusoidal_embedding": false,
+            "activation": "gelu",
+            "supervise_all_steps": false,
+            "nn_parameter_for_timesteps": true,
+            "pred_future_acs": false
+        }
+    },
+    "observation": {
+        "modalities": {
+            "obs": {
+                "low_dim": [
+                    "action_prior_dummy"
+                ],
+                "rgb": [],
+                "depth": [],
+                "scan": []
+            },
+            "goal": {
+                "low_dim": [],
+                "rgb": [],
+                "depth": [],
+                "scan": []
+            }
+        },
+        "encoder": {
+            "low_dim": {
+                "core_class": null,
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "rgb": {
+                "core_class": "VisualCore",
+                "core_kwargs": {
+                    "feature_dimension": 64,
+                    "backbone_class": "ResNet18Conv",
+                    "backbone_kwargs": {
+                        "pretrained": false,
+                        "input_coord_conv": false
+                    },
+                    "pool_class": "SpatialSoftmax",
+                    "pool_kwargs": {
+                        "num_kp": 32,
+                        "learnable_temperature": false,
+                        "temperature": 1.0,
+                        "noise_std": 0.0
+                    }
+                },
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "depth": {
+                "core_class": "VisualCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "scan": {
+                "core_class": "ScanCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            }
+        }
+    },
+    "meta": {
+        "hp_base_config_file": null,
+        "hp_keys": [],
+        "hp_values": []
+    }
+}

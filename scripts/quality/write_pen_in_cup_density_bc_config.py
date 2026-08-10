@@ -35,7 +35,7 @@ RGB_BY_CONDITION = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--algo", choices=["gaussian", "gmm", "discrete"], required=True)
+    parser.add_argument("--algo", choices=["gaussian", "gmm", "flow", "discrete"], required=True)
     parser.add_argument("--condition", choices=sorted(LOW_DIM_BY_CONDITION), required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -47,12 +47,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epoch-steps", type=int, default=100)
     parser.add_argument("--validation-steps", type=int, default=25)
     parser.add_argument("--save-every-n-epochs", type=int, default=50)
+    parser.add_argument("--disable-best-validation-save", action="store_true")
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--l2-regularization", type=float, default=0.0)
     parser.add_argument("--actor-layer-dims", type=str, default="1024,1024")
     parser.add_argument("--train-filter-key", default="train")
     parser.add_argument("--valid-filter-key", default="valid")
     parser.add_argument("--hdf5-normalize-obs", action="store_true")
+    parser.add_argument(
+        "--action-transform",
+        choices=["identity", "minmax", "zscore", "robust_scale", "zca"],
+        default="identity",
+    )
+    parser.add_argument("--mean-squash", choices=["tanh", "none"], default="tanh")
+    parser.add_argument("--covariance-type", choices=["diag", "full"], default="diag")
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--code-version", default="unknown")
+    parser.add_argument("--regime", choices=["normal", "fold0", "fold1"], default="normal")
     parser.add_argument(
         "--disable-rgb-randomizer",
         action="store_true",
@@ -61,6 +72,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gmm-modes", type=int, default=5)
     parser.add_argument("--gaussian-min-std", type=float, default=1e-4)
     parser.add_argument("--gaussian-fixed-std", action="store_true")
+    parser.add_argument("--flow-num-blocks", type=int, default=6)
+    parser.add_argument("--flow-hidden-dim", type=int, default=256)
+    parser.add_argument("--flow-context-dim", type=int, default=256)
+    parser.add_argument("--flow-scale-limit", type=float, default=2.0)
     parser.add_argument("--discrete-bins", type=int, default=256)
     parser.add_argument("--discrete-loss-type", choices=["hard_ce", "soft_ce"], default="hard_ce")
     parser.add_argument("--soft-sigma-bins", type=float, default=1.5)
@@ -97,11 +112,15 @@ def main() -> None:
     cfg["experiment"]["rollout"]["enabled"] = False
     cfg["experiment"]["save"]["enabled"] = True
     cfg["experiment"]["save"]["every_n_epochs"] = int(args.save_every_n_epochs)
-    cfg["experiment"]["save"]["on_best_validation"] = True
+    cfg["experiment"]["save"]["on_best_validation"] = not args.disable_best_validation_save
     cfg["experiment"]["logging"]["log_wandb"] = bool(args.log_wandb)
     cfg["experiment"]["logging"]["wandb_proj_name"] = args.wandb_project
     cfg["experiment"]["epoch_every_n_steps"] = int(args.epoch_steps)
     cfg["experiment"]["validation_epoch_every_n_steps"] = int(args.validation_steps)
+    cfg["experiment"]["provenance"] = {
+        "code_version": args.code_version,
+        "regime": args.regime,
+    }
 
     cfg["train"]["data"] = str(args.dataset)
     cfg["train"]["output_dir"] = args.output_dir
@@ -111,11 +130,26 @@ def main() -> None:
     cfg["train"]["hdf5_validation_filter_key"] = args.valid_filter_key
     cfg["train"]["hdf5_load_next_obs"] = False
     cfg["train"]["hdf5_normalize_obs"] = bool(args.hdf5_normalize_obs)
+    cfg["train"]["action_transform"] = {
+        "type": args.action_transform,
+        "scale_floor": 1e-6,
+    }
+    cfg["train"]["action_config"] = {
+        "actions": {
+            "normalization": {
+                "identity": None,
+                "minmax": "min_max",
+                "zscore": "zscore",
+                "robust_scale": "robust_scale",
+                "zca": "zca",
+            }[args.action_transform]
+        }
+    }
     cfg["train"]["seq_length"] = 1
     cfg["train"]["frame_stack"] = 1
     cfg["train"]["batch_size"] = int(args.batch_size)
     cfg["train"]["num_epochs"] = int(args.num_epochs)
-    cfg["train"]["seed"] = 1
+    cfg["train"]["seed"] = int(args.seed)
 
     cfg["algo"]["actor_layer_dims"] = parse_dims(args.actor_layer_dims)
     cfg["algo"]["optim_params"]["policy"]["learning_rate"]["initial"] = float(args.learning_rate)
@@ -123,10 +157,15 @@ def main() -> None:
 
     cfg["algo"]["gaussian"] = cfg["algo"].get("gaussian", {})
     cfg["algo"]["gmm"] = cfg["algo"].get("gmm", {})
-    cfg["algo"]["discrete"] = cfg["algo"].get("discrete", {})
+    cfg["algo"]["flow"] = cfg["algo"].get("flow", {})
     cfg["algo"]["gaussian"]["enabled"] = args.algo == "gaussian"
     cfg["algo"]["gmm"]["enabled"] = args.algo == "gmm"
-    cfg["algo"]["discrete"]["enabled"] = args.algo == "discrete"
+    if args.algo == "discrete":
+        cfg["algo"]["discrete"] = cfg["algo"].get("discrete", {})
+        cfg["algo"]["discrete"]["enabled"] = True
+    else:
+        cfg["algo"].pop("discrete", None)
+    cfg["algo"]["flow"]["enabled"] = args.algo == "flow"
     cfg["algo"]["vae"]["enabled"] = False
     cfg["algo"]["rnn"]["enabled"] = False
     cfg["algo"]["transformer"]["enabled"] = False
@@ -139,17 +178,31 @@ def main() -> None:
     # low_noise_eval forces std=1e-4 in eval mode and makes validation NLL
     # incomparable with the likelihood used by the scoring scripts.
     cfg["algo"]["gaussian"]["low_noise_eval"] = False
+    cfg["algo"]["gaussian"]["mean_squash"] = args.mean_squash
+    cfg["algo"]["gaussian"]["covariance_type"] = args.covariance_type
 
     cfg["algo"]["gmm"]["num_modes"] = int(args.gmm_modes)
     cfg["algo"]["gmm"]["min_std"] = float(args.gaussian_min_std)
     cfg["algo"]["gmm"]["std_activation"] = "softplus"
     cfg["algo"]["gmm"]["low_noise_eval"] = False
+    cfg["algo"]["gmm"]["mean_squash"] = args.mean_squash
+    cfg["algo"]["gmm"]["covariance_type"] = args.covariance_type
 
-    cfg["algo"]["discrete"]["num_bins"] = int(args.discrete_bins)
-    cfg["algo"]["discrete"]["bin_type"] = "uniform"
-    cfg["algo"]["discrete"]["loss_type"] = args.discrete_loss_type
-    cfg["algo"]["discrete"]["soft_sigma_bins"] = float(args.soft_sigma_bins)
-    cfg["algo"]["discrete"]["soft_truncate_bins"] = int(args.soft_truncate_bins)
+    cfg["algo"]["flow"].update(
+        {
+            "num_blocks": int(args.flow_num_blocks),
+            "hidden_dim": int(args.flow_hidden_dim),
+            "context_dim": int(args.flow_context_dim),
+            "scale_limit": float(args.flow_scale_limit),
+        }
+    )
+
+    if args.algo == "discrete":
+        cfg["algo"]["discrete"]["num_bins"] = int(args.discrete_bins)
+        cfg["algo"]["discrete"]["bin_type"] = "uniform"
+        cfg["algo"]["discrete"]["loss_type"] = args.discrete_loss_type
+        cfg["algo"]["discrete"]["soft_sigma_bins"] = float(args.soft_sigma_bins)
+        cfg["algo"]["discrete"]["soft_truncate_bins"] = int(args.soft_truncate_bins)
 
     cfg["observation"]["modalities"]["obs"]["low_dim"] = LOW_DIM_BY_CONDITION[args.condition]
     cfg["observation"]["modalities"]["obs"]["rgb"] = RGB_BY_CONDITION[args.condition]

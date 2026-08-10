@@ -1,0 +1,44 @@
+{
+  "task": "threading_d0",
+  "action_representation": "8d_absolute_joint",
+  "recommended_checkpoint": "epoch_2000_final",
+  "primary": {
+    "head": "gaussian",
+    "normalization": "identity",
+    "mean_squash": "none",
+    "covariance": "diag",
+    "min_std": "0.01 * train_split_raw_std_per_dimension",
+    "score": "model_mi_reference_prior",
+    "score_number": 6
+  },
+  "aggressive_filtering": {
+    "head": "gaussian",
+    "normalization": "zscore",
+    "mean_squash": "none",
+    "covariance": "diag",
+    "min_std": 0.01,
+    "score": "data_mi_learned_marginal",
+    "score_number": 2
+  },
+  "secondary": {
+    "head": "gaussian",
+    "normalization": "robust_scale",
+    "mean_squash": "none",
+    "covariance": "diag",
+    "min_std": 0.01,
+    "scores": [
+      "data_mi_learned_marginal",
+      "model_mi_reference_prior"
+    ]
+  },
+  "gmm_ablation": {
+    "head": "gmm",
+    "num_modes": 5,
+    "normalization": "robust_scale",
+    "mean_squash": "none",
+    "covariance": "diag",
+    "min_std": 0.01,
+    "score": "model_mi_reference_prior",
+    "score_number": 6
+  }
+}

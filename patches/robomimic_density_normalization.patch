@@ -1,0 +1,1039 @@
+diff --git a/robomimic/algo/bc.py b/robomimic/algo/bc.py
+index b824b32..296d876 100644
+--- a/robomimic/algo/bc.py
++++ b/robomimic/algo/bc.py
+@@ -37,13 +37,22 @@ def algo_config_to_class(algo_config):
+     # some of these options
+     gaussian_enabled = ("gaussian" in algo_config and algo_config.gaussian.enabled)
+     gmm_enabled = ("gmm" in algo_config and algo_config.gmm.enabled)
++    flow_enabled = ("flow" in algo_config and algo_config.flow.enabled)
+     vae_enabled = ("vae" in algo_config and algo_config.vae.enabled)
+ 
+     rnn_enabled = algo_config.rnn.enabled
+     # support legacy configs that do not have "transformer" item
+     transformer_enabled = ("transformer" in algo_config) and algo_config.transformer.enabled
+ 
+-    if gaussian_enabled:
++    enabled_count = sum((gaussian_enabled, gmm_enabled, vae_enabled, flow_enabled))
++    if enabled_count > 1:
++        raise ValueError("Only one BC density family can be enabled")
++
++    if flow_enabled:
++        if rnn_enabled or transformer_enabled:
++            raise NotImplementedError
++        algo_class, algo_kwargs = BC_Flow, {}
++    elif gaussian_enabled:
+         if rnn_enabled:
+             raise NotImplementedError
+         elif transformer_enabled:
+@@ -272,6 +281,8 @@ class BC_Gaussian(BC):
+             std_limits=(self.algo_config.gaussian.min_std, 7.5),
+             std_activation=self.algo_config.gaussian.std_activation,
+             low_noise_eval=self.algo_config.gaussian.low_noise_eval,
++            mean_squash=self.algo_config.gaussian.get("mean_squash", "tanh"),
++            covariance_type=self.algo_config.gaussian.get("covariance_type", "diag"),
+             encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
+         )
+ 
+@@ -364,12 +375,34 @@ class BC_GMM(BC_Gaussian):
+             min_std=self.algo_config.gmm.min_std,
+             std_activation=self.algo_config.gmm.std_activation,
+             low_noise_eval=self.algo_config.gmm.low_noise_eval,
++            mean_squash=self.algo_config.gmm.get("mean_squash", "tanh"),
++            covariance_type=self.algo_config.gmm.get("covariance_type", "diag"),
+             encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
+         )
+ 
+         self.nets = self.nets.float().to(self.device)
+ 
+ 
++class BC_Flow(BC_Gaussian):
++    """Behavioral cloning with a conditional RealNVP action density."""
++
++    def _create_networks(self):
++        assert self.algo_config.flow.enabled
++        self.nets = nn.ModuleDict()
++        self.nets["policy"] = PolicyNets.ConditionalRealNVPActorNetwork(
++            obs_shapes=self.obs_shapes,
++            goal_shapes=self.goal_shapes,
++            ac_dim=self.ac_dim,
++            mlp_layer_dims=self.algo_config.actor_layer_dims,
++            num_blocks=self.algo_config.flow.num_blocks,
++            hidden_dim=self.algo_config.flow.hidden_dim,
++            context_dim=self.algo_config.flow.context_dim,
++            scale_limit=self.algo_config.flow.scale_limit,
++            encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
++        )
++        self.nets = self.nets.float().to(self.device)
++
++
+ class BC_VAE(BC):
+     """
+     BC training with a VAE policy.
+diff --git a/robomimic/config/base_config.py b/robomimic/config/base_config.py
+index 0d71bbf..5d9990f 100644
+--- a/robomimic/config/base_config.py
++++ b/robomimic/config/base_config.py
+@@ -87,6 +87,8 @@ class BaseConfig(Config):
+         self.experiment.logging.log_tb = True                       # enable tensorboard logging
+         self.experiment.logging.log_wandb = False                   # enable wandb logging
+         self.experiment.logging.wandb_proj_name = "debug"           # project name if using wandb
++        self.experiment.provenance.code_version = "unknown"         # source revision used for the run
++        self.experiment.provenance.regime = "normal"                # normal, fold0, or fold1
+                 
+         ## save config - if and when to save model checkpoints ##
+         self.experiment.save.enabled = True                         # whether model saving should be enabled or disabled
+@@ -225,6 +227,11 @@ class BaseConfig(Config):
+                 "normalization": None
+             }
+         }
++        # Density experiments use this explicit, serializable transform name.
++        # The dataset layer mirrors it into action_config for backwards
++        # compatibility with existing robomimic consumers.
++        self.train.action_transform.type = "identity"
++        self.train.action_transform.scale_floor = 1e-6
+ 
+         # one of [None, "last"] - set to "last" to include goal observations in each batch
+         self.train.goal_mode = None
+diff --git a/robomimic/config/bc_config.py b/robomimic/config/bc_config.py
+index da6337b..0df714c 100644
+--- a/robomimic/config/bc_config.py
++++ b/robomimic/config/bc_config.py
+@@ -47,6 +47,8 @@ class BCConfig(BaseConfig):
+         self.algo.gaussian.min_std = 0.01               # minimum std output from network
+         self.algo.gaussian.std_activation = "softplus"  # activation to use for std output from policy net
+         self.algo.gaussian.low_noise_eval = True        # low-std at test-time 
++        self.algo.gaussian.mean_squash = "tanh"         # one of ["tanh", "none"]
++        self.algo.gaussian.covariance_type = "diag"     # one of ["diag", "full"]
+ 
+         # stochastic GMM policy settings
+         self.algo.gmm.enabled = False                   # whether to train a GMM policy
+@@ -54,6 +56,15 @@ class BCConfig(BaseConfig):
+         self.algo.gmm.min_std = 0.0001                  # minimum std output from network
+         self.algo.gmm.std_activation = "softplus"       # activation to use for std output from policy net
+         self.algo.gmm.low_noise_eval = True             # low-std at test-time 
++        self.algo.gmm.mean_squash = "tanh"              # one of ["tanh", "none"]
++        self.algo.gmm.covariance_type = "diag"          # one of ["diag", "full"]
++
++        # conditional RealNVP density settings
++        self.algo.flow.enabled = False
++        self.algo.flow.num_blocks = 6
++        self.algo.flow.hidden_dim = 256
++        self.algo.flow.context_dim = 256
++        self.algo.flow.scale_limit = 2.0
+ 
+         # stochastic VAE policy settings
+         self.algo.vae.enabled = False                   # whether to train a VAE policy
+diff --git a/robomimic/models/policy_nets.py b/robomimic/models/policy_nets.py
+index 8dba1d9..f72136d 100644
+--- a/robomimic/models/policy_nets.py
++++ b/robomimic/models/policy_nets.py
+@@ -23,6 +23,21 @@ from robomimic.models.vae_nets import VAE
+ from robomimic.models.distributions import TanhWrappedDistribution
+ 
+ 
++def _scale_tril_from_raw(raw, action_dim, activation, min_std, max_std=None):
++    """Convert packed lower-triangle parameters into a valid Cholesky factor."""
++    rows, cols = torch.tril_indices(action_dim, action_dim, device=raw.device)
++    scale_tril = raw.new_zeros(raw.shape[:-1] + (action_dim, action_dim))
++    scale_tril[..., rows, cols] = raw
++    diagonal = torch.diagonal(scale_tril, dim1=-2, dim2=-1)
++    diagonal = activation(diagonal) + min_std
++    if max_std is not None:
++        diagonal = torch.clamp(diagonal, max=max_std)
++    scale_tril = scale_tril - torch.diag_embed(
++        torch.diagonal(scale_tril, dim1=-2, dim2=-1)
++    ) + torch.diag_embed(diagonal)
++    return scale_tril
++
++
+ class ActorNetwork(MIMO_MLP):
+     """
+     A basic policy network that predicts actions from observations.
+@@ -207,6 +222,8 @@ class GaussianActorNetwork(ActorNetwork):
+         mean_limits=(-9.0, 9.0),
+         std_limits=(0.007, 7.5),
+         low_noise_eval=True,
++        mean_squash="tanh",
++        covariance_type="diag",
+         use_tanh=False,
+         goal_shapes=None,
+         encoder_kwargs=None,
+@@ -274,7 +291,8 @@ class GaussianActorNetwork(ActorNetwork):
+         self.fixed_std = fixed_std
+         self.init_std = init_std
+         self.mean_limits = np.array(mean_limits)
+-        self.std_limits = np.array(std_limits)
++        self.min_std = np.asarray(std_limits[0], dtype=np.float32)
++        self.max_std = float(std_limits[1])
+ 
+         # Define activations to use
+         def softplus_scaled(x):
+@@ -293,6 +311,14 @@ class GaussianActorNetwork(ActorNetwork):
+ 
+         self.low_noise_eval = low_noise_eval
+         self.use_tanh = use_tanh
++        if mean_squash not in ("tanh", "none"):
++            raise ValueError("mean_squash must be 'tanh' or 'none'")
++        if covariance_type not in ("diag", "full"):
++            raise ValueError("covariance_type must be 'diag' or 'full'")
++        if fixed_std and covariance_type != "diag":
++            raise ValueError("fixed_std is only supported for diagonal covariance")
++        self.mean_squash = mean_squash
++        self.covariance_type = covariance_type
+ 
+         super(GaussianActorNetwork, self).__init__(
+             obs_shapes=obs_shapes,
+@@ -314,10 +340,8 @@ class GaussianActorNetwork(ActorNetwork):
+         Tells @MIMO_MLP superclass about the output dictionary that should be generated
+         at the last layer. Network outputs parameters of Gaussian distribution.
+         """
+-        return OrderedDict(
+-            mean=(self.ac_dim,), 
+-            scale=(self.ac_dim,),
+-        )
++        scale_dim = self.ac_dim if self.covariance_type == "diag" else self.ac_dim * (self.ac_dim + 1) // 2
++        return OrderedDict(mean=(self.ac_dim,), scale=(scale_dim,))
+ 
+     def forward_train(self, obs_dict, goal_dict=None):
+         """
+@@ -341,25 +365,38 @@ class GaussianActorNetwork(ActorNetwork):
+         mean = torch.clamp(mean, min=self.mean_limits[0], max=self.mean_limits[1])
+ 
+         # apply tanh squashing to mean if not using tanh-Gaussian to ensure mean is in [-1, 1]
+-        if not self.use_tanh:
++        if self.mean_squash == "tanh":
+             mean = torch.tanh(mean)
+ 
+         # Calculate scale
+         if self.low_noise_eval and (not self.training):
+             # override std value so that you always approximately sample the mean
+-            scale = torch.ones_like(mean) * 1e-4
++            if self.covariance_type == "diag":
++                scale = torch.ones_like(mean) * 1e-4
++            else:
++                scale_tril = torch.diag_embed(torch.ones_like(mean) * 1e-4)
+         else:
+-            # Post-process the scale accordingly
+-            scale = self.activations[self.std_activation](scale)
+-            # Clamp the scale
+-            scale = torch.clamp(scale, min=self.std_limits[0], max=self.std_limits[1])
++            if self.covariance_type == "diag":
++                scale = self.activations[self.std_activation](scale)
++                min_std = torch.as_tensor(self.min_std, device=scale.device, dtype=scale.dtype)
++                scale = torch.minimum(torch.maximum(scale, min_std), torch.as_tensor(self.max_std, device=scale.device, dtype=scale.dtype))
++            else:
++                scale_tril = _scale_tril_from_raw(
++                    scale,
++                    self.ac_dim,
++                    self.activations[self.std_activation],
++                    torch.as_tensor(self.min_std, device=scale.device, dtype=scale.dtype),
++                    self.max_std,
++                )
+ 
+ 
+         # the Independent call will make it so that `batch_shape` for dist will be equal to batch size
+         # while `event_shape` will be equal to action dimension - ensuring that log-probability 
+         # computations are summed across the action dimension
+-        dist = D.Normal(loc=mean, scale=scale)
+-        dist = D.Independent(dist, 1)
++        if self.covariance_type == "diag":
++            dist = D.Independent(D.Normal(loc=mean, scale=scale), 1)
++        else:
++            dist = D.MultivariateNormal(loc=mean, scale_tril=scale_tril)
+ 
+         if self.use_tanh:
+             # Wrap distribution with Tanh
+@@ -389,8 +426,8 @@ class GaussianActorNetwork(ActorNetwork):
+ 
+     def _to_string(self):
+         """Info to pretty print."""
+-        msg = "action_dim={}\nfixed_std={}\nstd_activation={}\ninit_std={}\nmean_limits={}\nstd_limits={}\nlow_noise_eval={}".format(
+-            self.ac_dim, self.fixed_std, self.std_activation, self.init_std, self.mean_limits, self.std_limits, self.low_noise_eval)
++        msg = "action_dim={}\nfixed_std={}\nstd_activation={}\ninit_std={}\nmean_limits={}\nmin_std={}\nmax_std={}\nlow_noise_eval={}\nmean_squash={}\ncovariance_type={}".format(
++            self.ac_dim, self.fixed_std, self.std_activation, self.init_std, self.mean_limits, self.min_std, self.max_std, self.low_noise_eval, self.mean_squash, self.covariance_type)
+         return msg
+ 
+ 
+@@ -408,6 +445,8 @@ class GMMActorNetwork(ActorNetwork):
+         min_std=0.01,
+         std_activation="softplus",
+         low_noise_eval=True,
++        mean_squash="tanh",
++        covariance_type="diag",
+         use_tanh=False,
+         goal_shapes=None,
+         encoder_kwargs=None,
+@@ -459,9 +498,15 @@ class GMMActorNetwork(ActorNetwork):
+ 
+         # parameters specific to GMM actor
+         self.num_modes = num_modes
+-        self.min_std = min_std
++        self.min_std = np.asarray(min_std, dtype=np.float32)
+         self.low_noise_eval = low_noise_eval
+         self.use_tanh = use_tanh
++        if mean_squash not in ("tanh", "none"):
++            raise ValueError("mean_squash must be 'tanh' or 'none'")
++        if covariance_type not in ("diag", "full"):
++            raise ValueError("covariance_type must be 'diag' or 'full'")
++        self.mean_squash = mean_squash
++        self.covariance_type = covariance_type
+ 
+         # Define activations to use
+         self.activations = {
+@@ -485,9 +530,10 @@ class GMMActorNetwork(ActorNetwork):
+         Tells @MIMO_MLP superclass about the output dictionary that should be generated
+         at the last layer. Network outputs parameters of GMM distribution.
+         """
++        scale_dim = self.ac_dim if self.covariance_type == "diag" else self.ac_dim * (self.ac_dim + 1) // 2
+         return OrderedDict(
+             mean=(self.num_modes, self.ac_dim), 
+-            scale=(self.num_modes, self.ac_dim), 
++            scale=(self.num_modes, scale_dim),
+             logits=(self.num_modes,),
+         )
+ 
+@@ -510,21 +556,34 @@ class GMMActorNetwork(ActorNetwork):
+         logits = out["logits"]
+ 
+         # apply tanh squashing to means if not using tanh-GMM to ensure means are in [-1, 1]
+-        if not self.use_tanh:
++        if self.mean_squash == "tanh":
+             means = torch.tanh(means)
+ 
+         # Calculate scale
+         if self.low_noise_eval and (not self.training):
+             # low-noise for all Gaussian dists
+-            scales = torch.ones_like(means) * 1e-4
++            if self.covariance_type == "diag":
++                scales = torch.ones_like(means) * 1e-4
++            else:
++                scale_tril = torch.diag_embed(torch.ones_like(means) * 1e-4)
+         else:
+-            # post-process the scale accordingly
+-            scales = self.activations[self.std_activation](scales) + self.min_std
++            if self.covariance_type == "diag":
++                min_std = torch.as_tensor(self.min_std, device=scales.device, dtype=scales.dtype)
++                scales = self.activations[self.std_activation](scales) + min_std
++            else:
++                scale_tril = _scale_tril_from_raw(
++                    scales,
++                    self.ac_dim,
++                    self.activations[self.std_activation],
++                    torch.as_tensor(self.min_std, device=scales.device, dtype=scales.dtype),
++                )
+ 
+         # mixture components - make sure that `batch_shape` for the distribution is equal
+         # to (batch_size, num_modes) since MixtureSameFamily expects this shape
+-        component_distribution = D.Normal(loc=means, scale=scales)
+-        component_distribution = D.Independent(component_distribution, 1)
++        if self.covariance_type == "diag":
++            component_distribution = D.Independent(D.Normal(loc=means, scale=scales), 1)
++        else:
++            component_distribution = D.MultivariateNormal(loc=means, scale_tril=scale_tril)
+ 
+         # unnormalized logits to categorical distribution for mixing the modes
+         mixture_distribution = D.Categorical(logits=logits)
+@@ -556,8 +615,160 @@ class GMMActorNetwork(ActorNetwork):
+ 
+     def _to_string(self):
+         """Info to pretty print."""
+-        return "action_dim={}\nnum_modes={}\nmin_std={}\nstd_activation={}\nlow_noise_eval={}".format(
+-            self.ac_dim, self.num_modes, self.min_std, self.std_activation, self.low_noise_eval)
++        return "action_dim={}\nnum_modes={}\nmin_std={}\nstd_activation={}\nlow_noise_eval={}\nmean_squash={}\ncovariance_type={}".format(
++            self.ac_dim, self.num_modes, self.min_std, self.std_activation, self.low_noise_eval, self.mean_squash, self.covariance_type)
++
++
++class ConditionalRealNVPDistribution(D.Distribution):
++    """Batched exact-likelihood distribution backed by a conditional RealNVP."""
++
++    arg_constraints = {}
++    has_rsample = False
++
++    def __init__(self, flow, context, validate_args=None):
++        self.flow = flow
++        self.context = context
++        super().__init__(
++            batch_shape=torch.Size(context.shape[:-1]),
++            event_shape=torch.Size((flow.ac_dim,)),
++            validate_args=validate_args,
++        )
++
++    def _broadcast(self, value):
++        shape = torch.broadcast_shapes(value.shape[:-1], self.context.shape[:-1])
++        value = value.expand(shape + (self.flow.ac_dim,))
++        context = self.context.expand(shape + (self.context.shape[-1],))
++        return value, context
++
++    def log_prob(self, value):
++        value, context = self._broadcast(value)
++        z, log_abs_det = self.flow.action_to_base(value, context)
++        base_log_prob = D.Normal(0.0, 1.0).log_prob(z).sum(dim=-1)
++        return base_log_prob + log_abs_det
++
++    def sample(self, sample_shape=torch.Size()):
++        shape = torch.Size(sample_shape) + self.batch_shape
++        z = torch.randn(
++            shape + self.event_shape,
++            dtype=self.context.dtype,
++            device=self.context.device,
++        )
++        context = self.context
++        for _ in sample_shape:
++            context = context.unsqueeze(0)
++        context = context.expand(shape + (context.shape[-1],))
++        actions, _ = self.flow.base_to_action(z, context)
++        return actions
++
++    @property
++    def mean(self):
++        z = torch.zeros(
++            self.batch_shape + self.event_shape,
++            dtype=self.context.dtype,
++            device=self.context.device,
++        )
++        actions, _ = self.flow.base_to_action(z, self.context)
++        return actions
++
++
++class ConditionalRealNVPActorNetwork(ActorNetwork):
++    """Six-block conditional affine-coupling density for low-dimensional actions."""
++
++    def __init__(
++        self,
++        obs_shapes,
++        ac_dim,
++        mlp_layer_dims,
++        num_blocks=6,
++        hidden_dim=256,
++        context_dim=256,
++        scale_limit=2.0,
++        goal_shapes=None,
++        encoder_kwargs=None,
++    ):
++        if num_blocks <= 0:
++            raise ValueError("num_blocks must be positive")
++        self.num_blocks = int(num_blocks)
++        self.hidden_dim = int(hidden_dim)
++        self.context_dim = int(context_dim)
++        self.scale_limit = float(scale_limit)
++        super().__init__(
++            obs_shapes=obs_shapes,
++            ac_dim=ac_dim,
++            mlp_layer_dims=mlp_layer_dims,
++            goal_shapes=goal_shapes,
++            encoder_kwargs=encoder_kwargs,
++        )
++        self.conditioners = nn.ModuleList(
++            [
++                nn.Sequential(
++                    nn.Linear(ac_dim + context_dim, hidden_dim),
++                    nn.ReLU(),
++                    nn.Linear(hidden_dim, hidden_dim),
++                    nn.ReLU(),
++                    nn.Linear(hidden_dim, 2 * ac_dim),
++                )
++                for _ in range(self.num_blocks)
++            ]
++        )
++        for index in range(self.num_blocks):
++            mask = ((torch.arange(ac_dim) + index) % 2 == 0).float()
++            self.register_buffer("coupling_mask_{}".format(index), mask)
++
++    def _get_output_shapes(self):
++        return OrderedDict(context=(self.context_dim,))
++
++    def _context(self, obs_dict, goal_dict=None):
++        return MIMO_MLP.forward(self, obs=obs_dict, goal=goal_dict)["context"]
++
++    def _params(self, block, masked_action, context, mask):
++        flat_action = masked_action.reshape(-1, self.ac_dim)
++        flat_context = context.reshape(-1, self.context_dim)
++        shift, raw_scale = self.conditioners[block](
++            torch.cat((flat_action, flat_context), dim=-1)
++        ).chunk(2, dim=-1)
++        shift = shift.reshape(masked_action.shape)
++        raw_scale = raw_scale.reshape(masked_action.shape)
++        inverse_mask = 1.0 - mask
++        log_scale = self.scale_limit * torch.tanh(raw_scale) * inverse_mask
++        return shift * inverse_mask, log_scale
++
++    def action_to_base(self, action, context):
++        value = action
++        total_log_det = action.new_zeros(action.shape[:-1])
++        for block in range(self.num_blocks):
++            mask = getattr(self, "coupling_mask_{}".format(block)).to(action)
++            masked = value * mask
++            shift, log_scale = self._params(block, masked, context, mask)
++            value = masked + (1.0 - mask) * (value * torch.exp(log_scale) + shift)
++            total_log_det = total_log_det + log_scale.sum(dim=-1)
++        return value, total_log_det
++
++    def base_to_action(self, base, context):
++        value = base
++        total_log_det = base.new_zeros(base.shape[:-1])
++        for block in reversed(range(self.num_blocks)):
++            mask = getattr(self, "coupling_mask_{}".format(block)).to(base)
++            masked = value * mask
++            shift, log_scale = self._params(block, masked, context, mask)
++            value = masked + (1.0 - mask) * ((value - shift) * torch.exp(-log_scale))
++            total_log_det = total_log_det - log_scale.sum(dim=-1)
++        return value, total_log_det
++
++    def forward_train(self, obs_dict, goal_dict=None):
++        return ConditionalRealNVPDistribution(self, self._context(obs_dict, goal_dict))
++
++    def forward(self, obs_dict, goal_dict=None):
++        return self.forward_train(obs_dict, goal_dict).sample()
++
++    def _to_string(self):
++        return "action_dim={}\nnum_blocks={}\nhidden_dim={}\ncontext_dim={}\nscale_limit={}".format(
++            self.ac_dim,
++            self.num_blocks,
++            self.hidden_dim,
++            self.context_dim,
++            self.scale_limit,
++        )
+ 
+ 
+ class RNNActorNetwork(RNN_MIMO_MLP):
+diff --git a/robomimic/scripts/train.py b/robomimic/scripts/train.py
+index c0c97b5..d4b7bee 100644
+--- a/robomimic/scripts/train.py
++++ b/robomimic/scripts/train.py
+@@ -61,6 +61,29 @@ def train(config, device, resume=False):
+     # path for latest model and backup (to support @resume functionality)
+     latest_model_path = os.path.join(time_dir, "last.pth")
+     latest_model_backup_path = os.path.join(time_dir, "last_bak.pth")
++    # Writing a full checkpoint every epoch can overwhelm shared filesystems.
++    # Save resume checkpoints periodically (and whenever a regular checkpoint
++    # is due) while keeping the previous version via atomic renames.
++    latest_model_save_interval = max(
++        1, int(os.environ.get("ROBOMIMIC_LATEST_SAVE_INTERVAL", "50"))
++    )
++    # Exact validation-best checkpoints can change many times during the first
++    # few epochs. Keep the rolling candidate on node-local storage and sync it
++    # to the shared checkpoint directory at a bounded cadence and on exit.
++    local_best_dir = os.environ.get("ROBOMIMIC_LOCAL_BEST_DIR")
++    local_best_path = None
++    if local_best_dir:
++        os.makedirs(local_best_dir, exist_ok=True)
++        local_best_path = os.path.join(local_best_dir, "best_validation.pth")
++    local_best_sync_interval = max(
++        0, int(os.environ.get("ROBOMIMIC_LOCAL_BEST_SYNC_INTERVAL", "0"))
++    )
++    early_stopping_patience = max(
++        0, int(os.environ.get("ROBOMIMIC_EARLY_STOPPING_PATIENCE", "0"))
++    )
++    early_stopping_min_epoch = max(
++        0, int(os.environ.get("ROBOMIMIC_EARLY_STOPPING_MIN_EPOCH", "0"))
++    )
+ 
+     if config.experiment.logging.terminal_output_to_txt:
+         # log stdout and stderr to a text file
+@@ -172,6 +195,31 @@ def train(config, device, resume=False):
+ 
+     # maybe retreve statistics for normalizing actions
+     action_normalization_stats = trainset.get_action_normalization_stats()
++    # Validation must use the transform fitted on the training episodes. Letting
++    # it fit its own statistics both leaks the validation split and changes the
++    # density coordinate system used for checkpoint selection.
++    if validset is not None:
++        validset.set_action_normalization_stats(action_normalization_stats)
++
++    # Identity-linear uses the same 1e-2 relative floor as normalized recipes.
++    # In raw model coordinates this is a per-dimension 1e-2 * train std floor.
++    if (
++        config.train.action_transform.type == "identity"
++        and (
++            (config.algo.gaussian.enabled and config.algo.gaussian.mean_squash == "none")
++            or (config.algo.gmm.enabled and config.algo.gmm.mean_squash == "none")
++        )
++    ):
++        relative_floor = []
++        scale_floor = float(config.train.action_transform.scale_floor)
++        for key in config.train.action_keys:
++            raw_std = np.asarray(action_normalization_stats[key]["raw_std"]).reshape(-1)
++            relative_floor.extend((0.01 * np.maximum(raw_std, scale_floor)).tolist())
++        with config.values_unlocked():
++            if config.algo.gaussian.enabled:
++                config.algo.gaussian.min_std = relative_floor
++            if config.algo.gmm.enabled:
++                config.algo.gmm.min_std = relative_floor
+ 
+     # initialize data loaders
+     train_loader = DataLoader(
+@@ -278,6 +326,7 @@ def train(config, device, resume=False):
+ 
+     # main training loop
+     best_valid_loss = None
++    best_valid_epoch = None
+     best_return = {k: -np.inf for k in envs} if config.experiment.rollout.enabled else None
+     best_success_rate = {k: -1. for k in envs} if config.experiment.rollout.enabled else None
+     last_ckpt_time = time.time()
+@@ -288,6 +337,7 @@ def train(config, device, resume=False):
+         variable_state = ckpt_dict["variable_state"]
+         start_epoch = variable_state["epoch"] + 1 # start at next epoch, since this recorded the last epoch of training completed
+         best_valid_loss = variable_state["best_valid_loss"]
++        best_valid_epoch = variable_state.get("best_valid_epoch")
+         best_return = variable_state["best_return"]
+         best_success_rate = variable_state["best_success_rate"]
+         print("*" * 50)
+@@ -295,6 +345,8 @@ def train(config, device, resume=False):
+         print("*" * 50)
+ 
+     for epoch in range(start_epoch, config.train.num_epochs + 1):
++        save_local_best = False
++        early_stop_requested = False
+         step_log = TrainUtils.run_epoch(
+             model=model,
+             data_loader=train_loader,
+@@ -353,10 +405,31 @@ def train(config, device, resume=False):
+             valid_check = "Loss" in step_log
+             if valid_check and (best_valid_loss is None or (step_log["Loss"] <= best_valid_loss)):
+                 best_valid_loss = step_log["Loss"]
++                best_valid_epoch = epoch
+                 if config.experiment.save.enabled and config.experiment.save.on_best_validation:
+-                    epoch_ckpt_name += "_best_validation_{}".format(best_valid_loss)
+-                    should_save_ckpt = True
+-                    ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
++                    if local_best_path is not None:
++                        save_local_best = True
++                    else:
++                        epoch_ckpt_name += "_best_validation_{}".format(best_valid_loss)
++                        should_save_ckpt = True
++                        ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
++
++            if (
++                early_stopping_patience > 0
++                and best_valid_epoch is not None
++                and epoch >= early_stopping_min_epoch
++                and epoch - best_valid_epoch >= early_stopping_patience
++            ):
++                early_stop_requested = True
++                epoch_ckpt_name += "_early_stop"
++                should_save_ckpt = True
++                ckpt_reason = "early_stop"
++                print(
++                    "early stopping requested at epoch {}: best validation "
++                    "epoch {} loss {} (patience {})".format(
++                        epoch, best_valid_epoch, best_valid_loss, early_stopping_patience
++                    )
++                )
+ 
+         # Evaluate the model by by running rollouts
+ 
+@@ -418,10 +491,30 @@ def train(config, device, resume=False):
+         variable_state = dict(
+             epoch=epoch,
+             best_valid_loss=best_valid_loss,
++            best_valid_epoch=best_valid_epoch,
+             best_return=best_return,
+             best_success_rate=best_success_rate,
+         )
+ 
++        if save_local_best:
++            local_best_tmp_path = "{}.tmp.{}".format(local_best_path, os.getpid())
++            try:
++                TrainUtils.save_model(
++                    model=model,
++                    config=config,
++                    env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
++                    shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
++                    variable_state=variable_state,
++                    ckpt_path=local_best_tmp_path,
++                    obs_normalization_stats=obs_normalization_stats,
++                    action_normalization_stats=action_normalization_stats,
++                )
++                os.replace(local_best_tmp_path, local_best_path)
++                print("saved rolling validation-best checkpoint to {}".format(local_best_path))
++            finally:
++                if os.path.exists(local_best_tmp_path):
++                    os.remove(local_best_tmp_path)
++
+         # Save model checkpoints based on conditions (success rate, validation loss, etc)
+         if should_save_ckpt:    
+             TrainUtils.save_model(
+@@ -435,22 +528,63 @@ def train(config, device, resume=False):
+                 action_normalization_stats=action_normalization_stats,
+             )
+ 
+-        # always save latest model for resume functionality
+-        print("\nsaving latest model at {}...\n".format(latest_model_path))
+-        TrainUtils.save_model(
+-            model=model,
+-            config=config,
+-            env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
+-            shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
+-            variable_state=variable_state,
+-            ckpt_path=latest_model_path,
+-            obs_normalization_stats=obs_normalization_stats,
+-            action_normalization_stats=action_normalization_stats,
++        # Save the latest resume checkpoint at a bounded cadence. Write to a
++        # temporary path first, then atomically rotate last -> last_bak and the
++        # new checkpoint -> last. This avoids both per-epoch NFS writes and a
++        # second full-file copy for the backup.
++        should_save_latest = (
++            should_save_ckpt
++            or epoch % latest_model_save_interval == 0
++            or epoch == config.train.num_epochs
+         )
+-
+-        # keep a backup model in case last.pth is malformed (e.g. job died last time during saving)
+-        shutil.copyfile(latest_model_path, latest_model_backup_path)
+-        print("\nsaved backup of latest model at {}\n".format(latest_model_backup_path))
++        if should_save_latest:
++            latest_model_tmp_path = "{}.tmp.{}".format(latest_model_path, os.getpid())
++            print("\nsaving latest model at {}...\n".format(latest_model_path))
++            try:
++                TrainUtils.save_model(
++                    model=model,
++                    config=config,
++                    env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
++                    shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
++                    variable_state=variable_state,
++                    ckpt_path=latest_model_tmp_path,
++                    obs_normalization_stats=obs_normalization_stats,
++                    action_normalization_stats=action_normalization_stats,
++                )
++                if os.path.exists(latest_model_path):
++                    os.replace(latest_model_path, latest_model_backup_path)
++                os.replace(latest_model_tmp_path, latest_model_path)
++                print("\nrotated previous latest model to {}\n".format(latest_model_backup_path))
++            finally:
++                if os.path.exists(latest_model_tmp_path):
++                    os.remove(latest_model_tmp_path)
++
++        sync_local_best = (
++            local_best_path is not None
++            and os.path.isfile(local_best_path)
++            and (
++                early_stop_requested
++                or epoch == config.train.num_epochs
++                or (
++                    local_best_sync_interval > 0
++                    and epoch % local_best_sync_interval == 0
++                )
++            )
++        )
++        if sync_local_best:
++            best_ckpt_name = "model_epoch_{}_best_validation_{}.pth".format(
++                best_valid_epoch, best_valid_loss
++            )
++            best_ckpt_path = os.path.join(ckpt_dir, best_ckpt_name)
++            if not os.path.isfile(best_ckpt_path):
++                best_ckpt_tmp_path = "{}.tmp.{}".format(best_ckpt_path, os.getpid())
++                try:
++                    shutil.copyfile(local_best_path, best_ckpt_tmp_path)
++                    os.replace(best_ckpt_tmp_path, best_ckpt_path)
++                    print("synced exact validation-best checkpoint to {}".format(best_ckpt_path))
++                finally:
++                    if os.path.exists(best_ckpt_tmp_path):
++                        os.remove(best_ckpt_tmp_path)
+ 
+         # Finally, log memory usage in MB
+         process = psutil.Process(os.getpid())
+@@ -458,6 +592,9 @@ def train(config, device, resume=False):
+         data_logger.record("System/RAM Usage (MB)", mem_usage, epoch)
+         print("\nEpoch {} Memory Usage: {} MB\n".format(epoch, mem_usage))
+ 
++        if early_stop_requested:
++            break
++
+     # terminate logging
+     data_logger.close()
+ 
+diff --git a/robomimic/utils/dataset.py b/robomimic/utils/dataset.py
+index a60d101..dc4de06 100644
+--- a/robomimic/utils/dataset.py
++++ b/robomimic/utils/dataset.py
+@@ -389,6 +389,15 @@ class SequenceDataset(torch.utils.data.Dataset):
+             action_stats = _aggregate_traj_stats(action_stats, traj_stats)
+         return action_stats
+ 
++    def get_all_actions(self):
++        """Return raw train-split actions for robust and covariance transforms."""
++        return {
++            key: np.concatenate(
++                [self.get_action_traj(ep)[key] for ep in self.demos], axis=0
++            ).astype(np.float64)
++            for key in self.action_keys
++        }
++
+     def set_action_normalization_stats(self, action_normalization_stats):
+         self.action_normalization_stats = action_normalization_stats
+ 
+@@ -403,7 +412,11 @@ class SequenceDataset(torch.utils.data.Dataset):
+         if self.action_normalization_stats is None:
+             action_stats = self.get_action_stats()
+             self.action_normalization_stats = action_stats_to_normalization_stats(
+-                action_stats, self.action_config)
++                action_stats, self.action_config, raw_actions=self.get_all_actions())
++            for key in self.action_normalization_stats:
++                self.action_normalization_stats[key]["fit_demo_ids"] = np.asarray(
++                    self.demos, dtype="S"
++                )
+         return self.action_normalization_stats
+ 
+     def get_dataset_for_ep(self, ep, key):
+@@ -737,7 +750,19 @@ class MetaDataset(torch.utils.data.Dataset):
+ 
+         action_stats = self.get_action_stats()
+         self.action_normalization_stats = action_stats_to_normalization_stats(
+-            action_stats, self.datasets[0].action_config)
++            action_stats,
++            self.datasets[0].action_config,
++            raw_actions=self.get_all_actions(),
++        )
++        fit_demo_ids = []
++        for dataset_index, dataset in enumerate(self.datasets):
++            fit_demo_ids.extend(
++                "{}:{}".format(dataset_index, demo) for demo in dataset.demos
++            )
++        for key in self.action_normalization_stats:
++            self.action_normalization_stats[key]["fit_demo_ids"] = np.asarray(
++                fit_demo_ids, dtype="S"
++            )
+         self.set_action_normalization_stats(self.action_normalization_stats)
+     
+     def __len__(self):
+@@ -783,6 +808,13 @@ class MetaDataset(torch.utils.data.Dataset):
+             meta_action_stats = _aggregate_traj_stats(meta_action_stats, ds_action_stats)
+             
+         return meta_action_stats
++
++    def get_all_actions(self):
++        by_dataset = [dataset.get_all_actions() for dataset in self.datasets]
++        return {
++            key: np.concatenate([values[key] for values in by_dataset], axis=0)
++            for key in self.datasets[0].action_keys
++        }
+     
+     def set_action_normalization_stats(self, action_normalization_stats):
+         self.action_normalization_stats = action_normalization_stats
+@@ -800,7 +832,10 @@ class MetaDataset(torch.utils.data.Dataset):
+         if self.action_normalization_stats is None:
+             action_stats = self.get_action_stats()
+             self.action_normalization_stats = action_stats_to_normalization_stats(
+-                action_stats, self.datasets[0].action_config)
++                action_stats,
++                self.datasets[0].action_config,
++                raw_actions=self.get_all_actions(),
++            )
+         return self.action_normalization_stats
+ 
+ def _compute_traj_stats(traj_obs_dict):
+@@ -835,7 +870,7 @@ def _aggregate_traj_stats(traj_stats_a, traj_stats_b):
+         merged_stats[k] = dict(n=n, mean=mean, sqdiff=M2, min=min_, max=max_)
+     return merged_stats
+ 
+-def action_stats_to_normalization_stats(action_stats, action_config):
++def action_stats_to_normalization_stats(action_stats, action_config, raw_actions=None):
+     """
+     Converts action statistics (min, max, mean, sqdiff, n) to normalization stats
+     (scale, offset) for each action key based on the normalization method specified in the action_config.
+@@ -855,9 +890,17 @@ def action_stats_to_normalization_stats(action_stats, action_config):
+         norm_method = action_config[action_key].get("normalization", None)
+         if norm_method is None:
+             # no normalization, unit scale, zero offset
++            raw_std = np.sqrt(
++                action_stats[action_key]["sqdiff"] / action_stats[action_key]["n"]
++            ).astype(np.float32)
++            floor = float(action_config[action_key].get("scale_floor", 1e-6))
+             action_normalization_stats[action_key] = {
+                 "scale": np.ones_like(action_stats[action_key]["mean"], dtype=np.float32),
+-                "offset": np.zeros_like(action_stats[action_key]["mean"], dtype=np.float32)
++                "offset": np.zeros_like(action_stats[action_key]["mean"], dtype=np.float32),
++                "raw_std": raw_std,
++                "zero_variance_dims": raw_std < floor,
++                "log_abs_det_jacobian": np.asarray([0.0], dtype=np.float64),
++                "transform_type": np.asarray(["identity"], dtype="S"),
+             }
+         elif norm_method == "min_max":
+             # normalize min to -1 and max to 1
+@@ -892,21 +935,73 @@ def action_stats_to_normalization_stats(action_stats, action_config):
+ 
+             action_normalization_stats[action_key] = {
+                 "scale": scale,
+-                "offset": offset
++                "offset": offset,
++                "zero_variance_dims": ignore_dim,
++                "log_abs_det_jacobian": np.asarray(
++                    [-np.log(scale.astype(np.float64)).sum()], dtype=np.float64
++                ),
++                "transform_type": np.asarray(["minmax"], dtype="S"),
+             }
+-        elif norm_method == "gaussian":
++        elif norm_method in ("gaussian", "zscore"):
+             # normalize to zero mean unit variance
+             input_mean = action_stats[action_key]["mean"].astype(np.float32)
+             input_std = np.sqrt(action_stats[action_key]["sqdiff"] / action_stats[action_key]["n"]).astype(np.float32)
+ 
+             # ignore input dimensions that is too small to prevent division by zero
+-            std_eps = 1e-6
++            std_eps = float(action_config[action_key].get("scale_floor", 1e-6))
+             ignore_dim = input_std < std_eps
+-            input_std[ignore_dim] = 1.0
++            input_std[ignore_dim] = std_eps
+ 
+             action_normalization_stats[action_key] = {
+                 "scale": input_std,
+-                "offset": input_mean
++                "offset": input_mean,
++                "zero_variance_dims": ignore_dim,
++                "log_abs_det_jacobian": np.asarray(
++                    [-np.log(input_std.astype(np.float64)).sum()], dtype=np.float64
++                ),
++                "transform_type": np.asarray(["zscore"], dtype="S"),
++            }
++        elif norm_method == "robust_scale":
++            if raw_actions is None:
++                raise ValueError("robust_scale requires raw train-split actions")
++            values = np.asarray(raw_actions[action_key], dtype=np.float64)
++            floor = float(action_config[action_key].get("scale_floor", 1e-6))
++            offset = np.median(values, axis=0, keepdims=True)
++            q25, q75 = np.percentile(values, [25.0, 75.0], axis=0)
++            scale = ((q75 - q25) / 1.349).reshape(1, -1)
++            scale[scale < floor] = floor
++            action_normalization_stats[action_key] = {
++                "scale": scale.astype(np.float32),
++                "offset": offset.astype(np.float32),
++                "zero_variance_dims": ((q75 - q25) / 1.349) < floor,
++                "log_abs_det_jacobian": np.asarray(
++                    [-np.log(scale).sum()], dtype=np.float64
++                ),
++                "transform_type": np.asarray(["robust_scale"], dtype="S"),
++            }
++        elif norm_method == "zca":
++            if raw_actions is None:
++                raise ValueError("zca requires raw train-split actions")
++            from sklearn.covariance import LedoitWolf
++
++            values = np.asarray(raw_actions[action_key], dtype=np.float64)
++            floor = float(action_config[action_key].get("scale_floor", 1e-6))
++            offset = values.mean(axis=0, keepdims=True)
++            covariance = LedoitWolf().fit(values).covariance_
++            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
++            eigenvalues = np.maximum(eigenvalues, floor ** 2)
++            matrix = (eigenvectors * (1.0 / np.sqrt(eigenvalues))) @ eigenvectors.T
++            inverse = (eigenvectors * np.sqrt(eigenvalues)) @ eigenvectors.T
++            action_normalization_stats[action_key] = {
++                "scale": np.ones_like(offset, dtype=np.float32),
++                "offset": offset.astype(np.float32),
++                "matrix": matrix[None].astype(np.float32),
++                "inverse_matrix": inverse[None].astype(np.float32),
++                "covariance": covariance[None].astype(np.float32),
++                "log_abs_det_jacobian": np.asarray(
++                    [np.linalg.slogdet(matrix)[1]], dtype=np.float64
++                ),
++                "transform_type": np.asarray(["zca"], dtype="S"),
+             }
+         else:
+             raise NotImplementedError(
+diff --git a/robomimic/utils/file_utils.py b/robomimic/utils/file_utils.py
+index 8d770af..6b7c020 100644
+--- a/robomimic/utils/file_utils.py
++++ b/robomimic/utils/file_utils.py
+@@ -196,10 +196,17 @@ def load_dict_from_checkpoint(ckpt_path):
+         ckpt_dict (dict): Loaded checkpoint dictionary.
+     """
+     ckpt_path = os.path.expanduser(ckpt_path)
++    load_kwargs = {}
+     if not torch.cuda.is_available():
+-        ckpt_dict = torch.load(ckpt_path, map_location=lambda storage, loc: storage, weights_only=False)
+-    else:
+-        ckpt_dict = torch.load(ckpt_path, weights_only=False)
++        load_kwargs["map_location"] = lambda storage, loc: storage
++    try:
++        ckpt_dict = torch.load(ckpt_path, weights_only=False, **load_kwargs)
++    except TypeError as exc:
++        if "weights_only" not in str(exc):
++            raise
++        # Older PyTorch versions do not support weights_only. These checkpoints
++        # are internal experiment artifacts, so falling back preserves compatibility.
++        ckpt_dict = torch.load(ckpt_path, **load_kwargs)
+     return ckpt_dict
+ 
+ 
+diff --git a/robomimic/utils/obs_utils.py b/robomimic/utils/obs_utils.py
+index 66d9c54..25236e1 100644
+--- a/robomimic/utils/obs_utils.py
++++ b/robomimic/utils/obs_utils.py
+@@ -482,6 +482,17 @@ def normalize_dict(dict, normalization_stats):
+ 
+     for m in dict:
+         offset = normalization_stats[m]["offset"][0]
++        if "matrix" in normalization_stats[m]:
++            matrix = normalization_stats[m]["matrix"]
++            if matrix.ndim == 3:
++                matrix = matrix[0]
++            value = dict[m] - offset
++            if torch.is_tensor(value):
++                matrix = torch.as_tensor(matrix, dtype=value.dtype, device=value.device)
++                dict[m] = torch.matmul(value, matrix.transpose(-1, -2))
++            else:
++                dict[m] = np.matmul(value, np.swapaxes(matrix, -1, -2))
++            continue
+         scale = normalization_stats[m]["scale"][0]
+ 
+         # check shape consistency
+@@ -526,6 +537,19 @@ def unnormalize_dict(dict, normalization_stats):
+ 
+     for m in dict:
+         offset = normalization_stats[m]["offset"]
++        if "inverse_matrix" in normalization_stats[m]:
++            inverse = normalization_stats[m]["inverse_matrix"]
++            if inverse.ndim == 3:
++                inverse = inverse[0]
++            if offset.ndim > dict[m].ndim:
++                offset = offset[0]
++            value = dict[m]
++            if torch.is_tensor(value):
++                inverse = torch.as_tensor(inverse, dtype=value.dtype, device=value.device)
++                dict[m] = torch.matmul(value, inverse.transpose(-1, -2)) + offset
++            else:
++                dict[m] = np.matmul(value, np.swapaxes(inverse, -1, -2)) + offset
++            continue
+         scale = normalization_stats[m]["scale"]
+ 
+         # check shape consistency
+diff --git a/robomimic/utils/train_utils.py b/robomimic/utils/train_utils.py
+index 8f9f555..966f78a 100644
+--- a/robomimic/utils/train_utils.py
++++ b/robomimic/utils/train_utils.py
+@@ -168,12 +168,34 @@ def dataset_factory(config, obs_keys, filter_by_attribute=None, dataset_path=Non
+     else:
+         ds_langs = [None for _ in config.train.data]
+ 
++    action_config = deepcopy(config.train.action_config)
++    if "action_transform" in config.train:
++        transform_type = config.train.action_transform.get("type", "identity")
++        normalization = {
++            "identity": None,
++            "minmax": "min_max",
++            "zscore": "zscore",
++            "robust_scale": "robust_scale",
++            "zca": "zca",
++        }.get(transform_type)
++        if transform_type not in {"identity", "minmax", "zscore", "robust_scale", "zca"}:
++            raise ValueError("Unsupported train.action_transform.type: {}".format(transform_type))
++        for action_key in config.train.action_keys:
++            # Preserve legacy configs that specify action_config=min_max but do
++            # not contain the newly-added action_transform field. New configs
++            # serialize both fields consistently in the config writer.
++            if transform_type != "identity" or action_config[action_key].get("normalization") is None:
++                action_config[action_key]["normalization"] = normalization
++            action_config[action_key]["scale_floor"] = float(
++                config.train.action_transform.get("scale_floor", 1e-6)
++            )
++
+     ds_kwargs = dict(
+         hdf5_path=dataset_path,
+         obs_keys=obs_keys,
+         action_keys=config.train.action_keys,
+         dataset_keys=config.train.dataset_keys,
+-        action_config=config.train.action_config,
++        action_config=action_config,
+         load_next_obs=config.train.hdf5_load_next_obs, # whether to load next observations (s') from dataset
+         frame_stack=config.train.frame_stack,
+         seq_length=config.train.seq_length,
