@@ -1,0 +1,13 @@
+{
+  "checkpoints_saved": false,
+  "conditions": 6,
+  "filter_semantics": {
+    "25": "drop 50, retain top 150",
+    "50": "drop 100, retain top 100",
+    "75": "drop 150, retain top 50"
+  },
+  "final_epoch": 600,
+  "masks": 18,
+  "rollout_episodes": 100,
+  "runs": 54
+}
